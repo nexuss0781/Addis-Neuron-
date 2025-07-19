@@ -16,6 +16,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# --- NEW: Download the spaCy language model ---
+RUN python -m spacy download en_core_web_sm
+
 # Copy the application code into the container
 COPY . .
 

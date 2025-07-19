@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'brain_api'
+    scrape_interval: 5s
+    static_configs:
+      # Use the Docker service name and internal port
+      - targets: ['brain_api:8000']
+
+  - job_name: 'logical_engine'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['logical_engine:8000']

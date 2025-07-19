@@ -1,15 +1,15 @@
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
+use actix_web_prom::PrometheusMetricsBuilder;
+
+// Declare the modules for different brain engines
+mod lve;
+mod hsm;
+mod ace; // <-- MODIFICATION: Add ace module
 
 #[derive(Serialize)]
 struct HealthResponse {
     engine_status: String,
-}
-
-#[derive(Serialize)]
-struct ValidationResponse {
-    isValid: bool,
-    reason: String,
 }
 
 // Health check endpoint
@@ -20,15 +20,26 @@ async fn health() -> impl Responder {
     })
 }
 
-// Placeholder for the Logic Validation Engine (LVE)
-// This will become much more complex in later phases.
+// LVE endpoint
 #[post("/validate")]
-async fn validate_logic(/* We will add a JSON body here later */) -> impl Responder {
-    // For now, it's always valid
-    HttpResponse::Ok().json(ValidationResponse {
-        isValid: true,
-        reason: "Placeholder validation successful.".to_string(),
-    })
+async fn validate_logic(request: web::Json<lve::LveRequest>) -> impl Responder {
+    let validation_result = lve::validate_contradiction(&request.into_inner());
+    HttpResponse::Ok().json(validation_result)
+}
+
+// HSM endpoint
+#[post("/hypothesize")]
+async fn hypothesize_logic(request: web::Json<hsm::HsmRequest>) -> impl Responder {
+    let reasoning_result = hsm::reason_hypothetically(&request.into_inner());
+    HttpResponse::Ok().json(reasoning_result)
+}
+
+// --- NEW ENDPOINT for the ACE ---
+#[post("/ace/run-compression")]
+async fn run_ace_compression(request: web::Json<ace::AceRequest>) -> impl Responder {
+    // Delegate to the ACE module
+    let compression_result = ace::run_compression_analysis(&request.into_inner());
+    HttpResponse::Ok().json(compression_result)
 }
 
 
@@ -36,13 +47,20 @@ async fn validate_logic(/* We will add a JSON body here later */) -> impl Respon
 async fn main() -> std::io::Result<()> {
     println!("🚀 Rust Logic Engine starting...");
 
-    HttpServer::new(|| {
+    let prometheus = PrometheusMetricsBuilder::new("logical_engine")
+        .endpoint("/metrics")
+        .build()
+        .unwrap();
+
+    HttpServer::new(move || {
         App::new()
+            .wrap(prometheus.clone())
             .service(health)
             .service(validate_logic)
-            // Future services for HSM, ACE, etc., will be added here
+            .service(hypothesize_logic)
+            .service(run_ace_compression) // <-- MODIFICATION: Register the new ACE service
     })
-    .bind(("0.0.0.0", 8000))? // Bind to all network interfaces inside the container
+    .bind(("0.0.0.0", 8000))?
     .run()
     .await
 }
