@@ -2,15 +2,12 @@ import os
 import redis
 from neo4j import GraphDatabase, Result
 from neo4j.exceptions import ServiceUnavailable
-import time
 import logging
-import json # <-- ADD THIS LINE
-# The other imports...
-# Import the data model we will create next
-# It's okay that it doesn't exist yet; this prepares the file.
+import json
+import requests
+from typing import Optional # <-- ADD THIS IMPORT
+
 from models import StructuredTriple
-import requests # <-- ADD THIS LINE
-# The other imports...
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
@@ -268,9 +265,6 @@ class DatabaseManager:
         if not self.neo4j_driver:
             return None
         
-        # A "leaf node" is a good candidate for a knowledge gap.
-        # This query finds a concept with exactly one relationship.
-        # It's a simple but effective way to find topics to expand on.
         query = (
             "MATCH (c:Concept) "
             "WITH c, size((c)--()) AS degree "
@@ -288,7 +282,6 @@ class DatabaseManager:
         
         logger.info("PFC Introspection: No specific knowledge gaps found at this time.")
         return None
-
     # --- NEW METHOD: Microglia "Pruning" Function ---
     def prune_weak_facts(self, significance_threshold: float = 0.0) -> int:
         """
