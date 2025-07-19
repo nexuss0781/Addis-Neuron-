@@ -2,7 +2,9 @@ from fastapi import FastAPI, HTTPException
 import logging
 import requests # Import requests library
 from requests.exceptions import RequestException
-
+from models import StructuredTriple # <-- ADD THIS LINE
+from neo4j.exceptions import ServiceUnavailable # <-- ADD THIS LINE
+# The other imports like FastAPI, requests, logging should already be there
 from db_interface import db_manager
 
 # Setup basic logging
@@ -79,3 +81,54 @@ async def test_integration():
 
 
 # Future endpoints like /learn and /query will be added here
+@app.post("/learn", status_code=201)
+async def learn_fact(triple: StructuredTriple):
+    """
+    Receives a structured fact and commands the brain to learn it.
+    This endpoint acts as the Thalamus.
+    """
+    try:
+        db_manager.learn_fact(triple)
+        return {
+            "message": "Fact learned successfully",
+            "fact": triple
+        }
+    except ServiceUnavailable as e:
+        logger.error(f"DATABASE ERROR during learn: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database service is unavailable. Could not learn fact."
+        )
+    except Exception as e:
+        logger.error(f"UNEXPECTED ERROR during learn: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+@app.get("/query")
+async def query_fact(subject: str, relationship: str):
+    """
+    Asks the brain a question by querying for relationships.
+    This endpoint acts as the interface to the Prefrontal Cortex.
+    Example: /query?subject=Socrates&relationship=IS_A
+    """
+    try:
+        results = db_manager.query_fact(subject=subject, relationship_type=relationship)
+        if not results:
+            return {"message": "No information found for this query."}
+        return {"subject": subject, "relationship": relationship, "results": results}
+    except ServiceUnavailable as e:
+        logger.error(f"DATABASE ERROR during query: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database service is unavailable. Could not perform query."
+        )
+    except Exception as e:
+        logger.error(f"UNEXPECTED ERROR during query: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+

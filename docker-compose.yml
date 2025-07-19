@@ -22,8 +22,12 @@ services:
     networks:
       - brain_network
     depends_on:
-      - nlse_db
-      - redis
+      nlse_db:
+        condition: service_healthy # <-- WAITS FOR THE HEALTHCHECK
+      redis:
+        condition: service_started
+      logical_engine:
+        condition: service_started
 
   # The Rust Logic Engine Service
   logical_engine:
@@ -32,10 +36,8 @@ services:
       dockerfile: Dockerfile
     container_name: logical_engine
     hostname: logical_engine
-    volumes:
-      - ./rust_engine:/usr/src/app # Mount for live code changes if using cargo-watch
     ports:
-      - "8002:8000" # Expose internal port 8000 to host port 8002
+      - "8002:8000"
     networks:
       - brain_network
 
@@ -55,8 +57,9 @@ services:
       - NEO4J_server_memory_heap_max__size=2G
     networks:
       - brain_network
+    # NEW: Healthcheck to ensure Neo4j is ready before brain_api starts
     healthcheck:
-      test: ["CMD-SHELL", "wget -O /dev/null http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:7474 || exit 1"]
       interval: 5s
       timeout: 10s
       retries: 10
