@@ -6,6 +6,7 @@ use actix_web_prom::PrometheusMetricsBuilder;
 mod lve;
 mod hsm;
 mod ace; // <-- MODIFICATION: Add ace module
+mod nlse_core;
 
 #[derive(Serialize)]
 struct HealthResponse {
