@@ -1,8 +1,7 @@
 // Declare the sub-modules within nlse_core
 pub mod models;
-pub mod storage_manager; // We will create this file next
+pub mod storage_manager;
+pub mod decay_agent; // <-- ADD THIS LINE
 
-// Re-export the most important public types for easier access
-// This means other parts of our app can write `use crate::nlse_core::NeuroAtom`
-// instead of the longer `use crate::nlse_core::models::NeuroAtom`
+// Re-export the most important public types
 pub use models::NeuroAtom;
