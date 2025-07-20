@@ -33,6 +33,8 @@ class DatabaseManager:
         self._connect_to_neo4j(NEO4J_URI, (NEO4J_USER, NEO4J_PASSWORD))
         self._connect_to_redis(REDIS_HOST, REDIS_PORT)
 
+    name_to_uuid_cache: dict = {}
+
     def _connect_to_neo4j(self, uri, auth):
         """Establish a connection to the Neo4j database."""
         try:
@@ -104,40 +106,43 @@ class DatabaseManager:
     # --- NEW METHOD: Prefrontal Cortex "Read" Function ---
     def query_fact(self, subject: str, relationship_type: str) -> list[str]:
         """
-        Queries for facts.
-        MODIFIED: Implements caching (Basal Ganglia) by checking Redis first.
-        It also still reinforces the path (Amygdala) on a cache miss.
+        NEW: Creates an ExecutionPlan to query for a fact.
         """
-        if not self.redis_client:
-            logger.warning("Redis not available, bypassing cache.")
-            return self._query_neo4j_and_reinforce(subject, relationship_type)
+        subject_id_str = self.name_to_uuid_cache.get(subject)
+        if not subject_id_str:
+            return []
 
-        # 1. Basal Ganglia: Check for a "habitual" thought (cache hit)
-        cache_key = f"query:{subject}:{relationship_type}"
-        try:
-            cached_result = self.redis_client.get(cache_key)
-            if cached_result:
-                logger.info(f"Basal Ganglia: Cache hit for '{cache_key}'. Returning cached result.")
-                return json.loads(cached_result) # Deserialize string back to list
-        except Exception as e:
-            logger.error(f"Redis cache read failed for key '{cache_key}': {e}")
-            # Fall through to Neo4j if cache fails
-
-        # 2. PFC/Hippocampus: If no cache hit, query the long-term store
-        logger.info(f"Basal Ganglia: Cache miss for '{cache_key}'. Querying Neo4j...")
-        results = self._query_neo4j_and_reinforce(subject, relationship_type)
-
-        # 3. Basal Ganglia: After a successful query, form a new "habit" (populate cache)
-        if results and self.redis_client:
-            try:
-                # Serialize list to a JSON string and set with an expiration (e.g., 1 hour)
-                self.redis_client.set(cache_key, json.dumps(results), ex=3600)
-                logger.info(f"Basal Ganglia: Cached result for '{cache_key}'.")
-            except Exception as e:
-                logger.error(f"Redis cache write failed for key '{cache_key}': {e}")
+        from models import RelationshipType
+        # This plan fetches the starting atom, then traverses its relationships.
+        plan = {
+            "steps": [
+                { "Fetch": {"id": subject_id_str, "context_key": "subject"} },
+                { "Traverse": {
+                    "from_context_key": "subject",
+                    "rel_type": RelationshipType[relationship_type.upper()].value,
+                    "output_key": "final"
+                }}
+            ]
+        }
         
-        return results
+        nlse_url = f"{LOGICAL_ENGINE_URL}/nlse/execute-plan"
+        try:
+            response = requests.post(nlse_url, json=plan)
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"NLSE executed 'query' plan with message: {result.get('message')}")
 
+            # Extract the names from the resulting atoms
+            if result.get("success"):
+                atom_results = result.get("atoms", [])
+                return [
+                    atom["properties"].get("name", {}).get("String", "Unknown")
+                    for atom in atom_results
+                ]
+            return []
+        except requests.RequestException as e:
+            logger.error(f"Could not execute 'query' plan on NLSE: {e}")
+            raise ServiceUnavailable("NLSE service is unavailable.") from e
     # --- NEW METHOD: Hippocampus "Validation Check" Function ---
     def validate_fact_with_lve(self, triple: StructuredTriple) -> dict:
         """
@@ -214,38 +219,23 @@ class DatabaseManager:
                 )
             
             return results
+            
     def learn_fact(self, triple: StructuredTriple) -> None:
         """
-        Learns a new fact by creating nodes and a relationship in Neo4j.
-        MODIFIED: Now sets/updates a 'significance' score.
+        NEW & CLEANER: Creates an ExecutionPlan to learn a new fact.
         """
-        if not self.neo4j_driver:
-            raise Exception("Cannot learn fact: Neo4j driver not available.")
-
-        relationship_type = "".join(filter(str.isalnum, triple.relationship.upper()))
-
-        # MERGE finds or creates the full path.
-        # ON CREATE SET initializes properties only for new relationships.
-        # ON MATCH SET updates properties for existing relationships.
-        query = (
-            "MERGE (s:Concept {name: $subject_name}) "
-            "MERGE (o:Concept {name: $object_name}) "
-            "MERGE (s)-[r:" + relationship_type + "]->(o) "
-            "ON CREATE SET r.significance = 1.0, r.last_accessed = timestamp() "
-            "ON MATCH SET r.significance = r.significance + 0.1 " # Reinforce existing knowledge
-            "RETURN type(r)"
-        )
-
-        with self.neo4j_driver.session() as session:
-            result = session.run(
-                query,
-                subject_name=triple.subject,
-                object_name=triple.object,
-            )
-            rel_type = result.single()[0] if result.peek() else "None"
-            logger.info(
-                f"Hippocampus learned/reinforced: ({triple.subject})-[{rel_type}]->({triple.object})"
-            )
+        plan = triple.to_neuro_atom_write_plan(self.name_to_uuid_cache)
+        
+        nlse_url = f"{LOGICAL_ENGINE_URL}/nlse/execute-plan"
+        try:
+            response = requests.post(nlse_url, json=plan)
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"NLSE executed 'learn' plan with result: {result.get('message')}")
+        except requests.RequestException as e:
+            logger.error(f"Could not execute 'learn' plan on NLSE: {e}")
+            raise ServiceUnavailable("NLSE service is unavailable.") from e
+            
     def close(self):
         """Closes database connections."""
         if self.neo4j_driver:

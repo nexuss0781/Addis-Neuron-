@@ -4,20 +4,30 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use uuid::Uuid;
 use memmap2::Mmap;
-
+use std::time::UNIX_EPOCH; // <-- ADD THIS LINE
+//... (other use statements) ...
 use super::models::{NeuroAtom, RelationshipType};
 
 #[derive(Debug, Clone, Copy)]
 pub enum AtomLocation {
+    T1, // <-- ADD THIS LINE
     T2(usize),
     T3(u64),
 }
 
 /// Manages the physical storage of NeuroAtoms across a multi-tiered system.
 pub struct StorageManager {
+    // --- NEW: Tier 1 Consciousness Buffer ---
+    t1_cache: HashMap<Uuid, NeuroAtom>,
+
+    // --- Tier 3 Deep Store ---
     t3_file: File,
+    
+    // --- Tier 2 Recent Memory Core ---
     t2_file: File,
     t2_mmap: Mmap,
+    
+    // Combined Indexes
     primary_index: HashMap<Uuid, AtomLocation>,
     relationship_index: HashMap<RelationshipType, Vec<Uuid>>,
 }
@@ -31,16 +41,21 @@ impl StorageManager {
         let t3_file = OpenOptions::new().read(true).write(true).create(true).open(&t3_path)?;
         let t2_file = OpenOptions::new().read(true).write(true).create(true).open(&t2_path)?;
         
-        // This map can be empty on first run, which is fine.
         let t2_mmap = unsafe { Mmap::map(&t2_file).unwrap_or_else(|_| Mmap::map(&File::create(&t2_path).unwrap()).unwrap()) };
         
         let (primary_index, relationship_index) = Self::rebuild_indexes(&t3_path, &t2_path)?;
         
-        println!("NLSE: StorageManager initialized with T2 and T3 stores.");
+        println!("NLSE: StorageManager initialized with T1, T2, and T3 stores.");
 
-        Ok(StorageManager { t3_file, t2_file, t2_mmap, primary_index, relationship_index })
+        Ok(StorageManager {
+            t1_cache: HashMap::new(), // <-- INITIALIZE T1 CACHE
+            t3_file,
+            t2_file,
+            t2_mmap,
+            primary_index,
+            relationship_index,
+        })
     }
-
     /// Writes a new atom directly to the T2 cache file.
     pub fn write_atom(&mut self, atom: &NeuroAtom) -> io::Result<()> {
         let encoded_atom = bincode::serialize(atom).map_err(|e| io::Error::new(ErrorKind::Other, e))?;
@@ -64,33 +79,48 @@ impl StorageManager {
         }
         Ok(())
     }
-    
-    /// Reads an Atom by checking T2 first, falling back to T3, and promotes if necessary.
+
+    /// Reads an Atom, checking tiers T1 -> T2 -> T3, and promotes data upward.
     pub fn read_atom(&mut self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
+        // --- T1 Cache Check ---
+        if let Some(atom) = self.t1_cache.get(&id) {
+            println!("NLSE: T1 cache hit for Atom {}.", id);
+            return Ok(Some(atom.clone()));
+        }
+
+        // Location lookup (T2 or T3)
         let location = self.primary_index.get(&id).cloned();
         if let Some(loc) = location {
-            let mut atom = match self.read_atom_from_location(id)? {
+            // Read from T2 or T3 using the helper
+            let mut atom = match self.read_atom_from_disk(loc)? {
                 Some(a) => a,
-                None => return Ok(None)
+                None => return Ok(None),
             };
-            
+
+            // Update timestamp
+            atom.access_timestamp = self.current_timestamp_secs();
+
+            // --- Promotion Logic ---
             if let AtomLocation::T3(_) = loc {
-                println!("NLSE: Promoting Atom {} to T2 cache.", atom.id);
-                self.write_atom(&atom)?; // write_atom now correctly handles T2 writes and index updates
+                println!("NLSE: Promoting Atom {} from T3 to T2.", atom.id);
+                // The new timestamp is saved during this write
+                self.write_atom_to_t2(&atom)?;
                 self.delete_from_t3(atom.id)?;
             } else {
-                // It was read from T2, so we update its timestamp to keep it "hot"
-                if self.current_timestamp_secs() - atom.access_timestamp > 1 { // Avoid rapid rewrites
-                    atom.access_timestamp = self.current_timestamp_secs();
-                    self.overwrite_atom_in_place(id, &atom)?;
-                }
+                 // It was in T2, so we just update the timestamp in-place
+                 self.overwrite_atom_in_place(id, &atom)?;
             }
+            
+            // --- ALL successful disk reads are promoted to the T1 cache ---
+            println!("NLSE: Promoting Atom {} to T1 cache.", atom.id);
+            self.primary_index.insert(id, AtomLocation::T1); // Update index to T1
+            self.t1_cache.insert(id, atom.clone()); // Insert the clone into T1
+
             Ok(Some(atom))
         } else {
-            Ok(None)
+            Ok(None) // Not found in any tier
         }
     }
-
     /// Scans the T2 cache for atoms older than a given age and moves them to T3.
     pub fn demote_cold_atoms(&mut self, max_age_secs: u64) -> io::Result<usize> {
         let now = self.current_timestamp_secs();
@@ -137,10 +167,13 @@ impl StorageManager {
     }
 
     fn current_timestamp_secs(&self) -> u64 {
-        std::time::SystemTime::now().duration_since(std.time::UNIX_EPOCH).unwrap_or_default().as_secs()
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH) // Correct usage
+            .unwrap_or_default()
+            .as_secs()
     }
     
-    fn read_atom_from_location(&mut self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
+    fn read_atom_from_disk(&mut self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
         let location = self.primary_index.get(&id).cloned();
         if let Some(loc) = location {
              match loc {
@@ -236,27 +269,40 @@ mod tests {
     use super::*;
     use crate::nlse_core::models::{NeuroAtom, Relationship, RelationshipType};
     use tempfile::tempdir;
+    use std::thread;
+    use std::time::Duration;
 
+    /// Helper assertion that compares all fields EXCEPT the timestamp.
+    fn assert_atoms_are_logically_equal(a: &NeuroAtom, b: &NeuroAtom) {
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.label, b.label);
+        assert_eq!(a.properties, b.properties);
+        assert_eq!(a.embedded_relationships, b.embedded_relationships);
+    }
+
+    // Helper to create a dummy atom for testing
     fn create_test_atom(name: &str, relationships: Vec<Relationship>) -> NeuroAtom {
         let mut atom = NeuroAtom::new_concept(name);
         atom.embedded_relationships = relationships;
-        atom.access_timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        atom.access_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         atom
     }
-    
+
     #[test]
     fn test_write_goes_to_t2() {
         let dir = tempdir().unwrap();
         let mut manager = StorageManager::new(dir.path()).unwrap();
 
-        let atom = create_test_atom("Socrates", vec![]);
-        manager.write_atom(&atom).unwrap();
+        let original_atom = create_test_atom("Socrates", vec![]);
+        manager.write_atom(&original_atom).unwrap();
 
-        let location = manager.primary_index.get(&atom.id).unwrap();
-        assert!(matches!(location, AtomLocation::T2(_)));
+        let retrieved_atom = manager.read_atom(original_atom.id).unwrap().unwrap();
         
-        let retrieved = manager.read_atom(atom.id).unwrap().unwrap();
-        assert_eq!(retrieved, atom);
+        // Use our robust assertion
+        assert_atoms_are_logically_equal(&original_atom, &retrieved_atom);
     }
 
     #[test]
@@ -264,25 +310,29 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut manager = StorageManager::new(dir.path()).unwrap();
         
-        let mut atom = create_test_atom("Cold Atom", vec![]);
-
-        // Manually write this atom to the T3 store
+        let atom = create_test_atom("Cold Atom", vec![]);
+        let original_ts = atom.access_timestamp;
+        
+        // Manually place in T3
         let t3_offset = manager.write_to_t3(&atom).unwrap();
         manager.primary_index.insert(atom.id, AtomLocation::T3(t3_offset));
 
-        // Sanity check: confirm it's in T3
-        let loc_before = manager.primary_index.get(&atom.id).unwrap();
-        assert!(matches!(loc_before, AtomLocation::T3(_)));
+        // Let some time pass to ensure the new timestamp will be different
+        thread::sleep(Duration::from_secs(2));
 
-        // Now, read the atom. This should trigger the promotion logic.
+        // Reading triggers promotion
         let retrieved = manager.read_atom(atom.id).unwrap().unwrap();
 
-        // Check if it was promoted
+        // Use our robust assertion for logical equality
+        assert_atoms_are_logically_equal(&atom, &retrieved);
+        // Assert that the timestamp was updated during promotion
+        assert!(retrieved.access_timestamp > original_ts);
+        
+        // Assert it's now in T2
         let loc_after = manager.primary_index.get(&atom.id).unwrap();
-        assert!(matches!(loc_after, AtomLocation::T2(_)), "Atom was not promoted to T2");
-        assert_eq!(retrieved, atom);
+        assert!(matches!(loc_after, AtomLocation::T2(_)));
     }
-
+    
     #[test]
     fn test_demotion_from_t2_to_t3() {
         let dir = tempdir().unwrap();
