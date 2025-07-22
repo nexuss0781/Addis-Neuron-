@@ -5,12 +5,7 @@ neo4j
 redis
 pydantic
 prometheus-fastapi-instrumentator
-fastapi
-uvicorn[standard]
-requests
-neo4j
-redis
-pydantic
-prometheus-fastapi-instrumentator
 beautifulsoup4
 spacy
+scikit-learn
+numpy

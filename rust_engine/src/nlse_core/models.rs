@@ -5,9 +5,8 @@ use uuid::Uuid;
 // Enums provide strict typing for our core concepts.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum AtomType {
-    Concept,
-    Word,
-    MetaConcept,
+    Concept, Word, MetaConcept,
+    DiseaseProtocol, Symptom, Medication,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]

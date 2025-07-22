@@ -8,6 +8,12 @@ use std::time::UNIX_EPOCH; // <-- ADD THIS LINE
 //... (other use statements) ...
 use super::models::{NeuroAtom, RelationshipType};
 
+/// Represents an entry in the Write-Ahead Log.
+#[derive(Serialize, Deserialize, Debug)]
+enum JournalEntry<'a> {
+    WriteT2(&'a [u8]),
+    WriteT3(&'a [u8]),
+}
 #[derive(Debug, Clone, Copy)]
 pub enum AtomLocation {
     T1, // <-- ADD THIS LINE
@@ -17,69 +23,198 @@ pub enum AtomLocation {
 
 /// Manages the physical storage of NeuroAtoms across a multi-tiered system.
 pub struct StorageManager {
-    // --- NEW: Tier 1 Consciousness Buffer ---
-    t1_cache: HashMap<Uuid, NeuroAtom>,
+    // --- NEW: Journal file for ACID compliance ---
+    journal_file: File,
 
-    // --- Tier 3 Deep Store ---
     t3_file: File,
-    
-    // --- Tier 2 Recent Memory Core ---
     t2_file: File,
     t2_mmap: Mmap,
-    
-    // Combined Indexes
     primary_index: HashMap<Uuid, AtomLocation>,
     relationship_index: HashMap<RelationshipType, Vec<Uuid>>,
+    // --- NEW INDEXES ---
+    context_index: HashMap<Uuid, Vec<Uuid>>, // Maps a context_id to a list of atom_ids in it
+    type_index: HashMap<AtomType, Vec<Uuid>>, // Maps an AtomType to a list of atom_ids
+    significance_index: Vec<(f32, Uuid)>,    // A sorted list of (significance, atom_id)
+}
+impl StorageManager {
+    /// Returns a list of Atom IDs within a given context.
+    fn log_to_journal(&mut self, entry: JournalEntry) -> io::Result<()> {
+    let encoded_entry = bincode::serialize(&entry).map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+    self.journal_file.seek(SeekFrom::Start(0))?;
+    self.journal_file.write_all(&encoded_entry)?;
+    self.journal_file.sync_all() // sync_all ensures metadata is written too, critical for recovery
 }
 
-impl StorageManager {
-    /// Creates a new StorageManager or opens existing database files.
-    pub fn new<P: AsRef<Path>>(base_path: P) -> io::Result<Self> {
-        let t3_path = base_path.as_ref().join("brain.db");
-        let t2_path = base_path.as_ref().join("brain_cache.db");
-        
-        let t3_file = OpenOptions::new().read(true).write(true).create(true).open(&t3_path)?;
-        let t2_file = OpenOptions::new().read(true).write(true).create(true).open(&t2_path)?;
-        
-        let t2_mmap = unsafe { Mmap::map(&t2_file).unwrap_or_else(|_| Mmap::map(&File::create(&t2_path).unwrap()).unwrap()) };
-        
-        let (primary_index, relationship_index) = Self::rebuild_indexes(&t3_path, &t2_path)?;
-        
-        println!("NLSE: StorageManager initialized with T1, T2, and T3 stores.");
+fn clear_journal(&mut self) -> io::Result<()> {
+    self.journal_file.seek(SeekFrom::Start(0))?;
+    self.journal_file.set_len(0)?; // Truncate the file to zero bytes
+    self.journal_file.sync_all()
+}
 
-        Ok(StorageManager {
-            t1_cache: HashMap::new(), // <-- INITIALIZE T1 CACHE
-            t3_file,
-            t2_file,
-            t2_mmap,
-            primary_index,
-            relationship_index,
-        })
+fn recover_from_journal(journal: &mut File, t2: &mut File, t3: &mut File) -> io::Result<()> {
+    println!("NLSE: Checking journal for recovery...");
+    let mut buffer = Vec::new();
+    journal.read_to_end(&mut buffer)?;
+
+    if buffer.is_empty() {
+        println!("NLSE: Journal is clean. No recovery needed.");
+        return Ok(());
     }
+
+    println!("NLSE: Journal contains data. Attempting recovery...");
+    let entry: JournalEntry = bincode::deserialize(&buffer)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
+
+    // Re-apply the logged operation to ensure it's complete
+    match entry {
+        JournalEntry::WriteT2(data) => {
+            let data_len = data.len() as u64;
+            t2.seek(SeekFrom::End(0))?;
+            t2.write_all(&data_len.to_le_bytes())?;
+            t2.write_all(data)?;
+            t2.sync_all()?;
+        }
+        JournalEntry::WriteT3(data) => {
+            let data_len = data.len() as u64;
+            t3.seek(SeekFrom::End(0))?;
+            t3.write_all(&data_len.to_le_bytes())?;
+            t3.write_all(data)?;
+            t3.sync_all()?;
+        }
+    }
+    
+    println!("NLSE: Recovery successful. Clearing journal.");
+    journal.seek(SeekFrom::Start(0))?;
+    journal.set_len(0)?;
+    journal.sync_all()?;
+    
+    Ok(())
+}
+    pub fn get_atoms_in_context(&self, context_id: &Uuid) -> Option<&Vec<Uuid>> {
+        self.context_index.get(context_id)
+    }
+    /// Returns the top N most significant Atom IDs.
+    pub fn get_most_significant_atoms(&self, limit: usize) -> Vec<Uuid> {
+        self.significance_index
+            .iter()
+            .take(limit)
+            .map(|&(_, id)| id)
+            .collect()
+    }    
+    /// Creates a new StorageManager or opens existing database files.
+    
+    
+     /// Retrieves a single atom and returns it without any promotion/timestamp logic.
+    /// Used for internal checks.
+    pub fn get_atom_by_id_raw(&mut self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
+        self.read_atom_from_location(id)
+    }   
+    
     /// Writes a new atom directly to the T2 cache file.
     pub fn write_atom(&mut self, atom: &NeuroAtom) -> io::Result<()> {
         let encoded_atom = bincode::serialize(atom).map_err(|e| io::Error::new(ErrorKind::Other, e))?;
-        let data_len = encoded_atom.len() as u64;
-
-        let write_offset = self.t2_file.seek(SeekFrom::End(0))?;
         
+    pub fn new<P: AsRef<Path>>(base_path: P) -> io::Result<Self> {
+    let journal_path = base_path.as_ref().join("journal.log");
+    let t3_path = base_path.as_ref().join("brain.db");
+    let t2_path = base_path.as_ref().join("brain_cache.db");
+
+    let mut journal_file = OpenOptions::new().read(true).write(true).create(true).open(&journal_path)?;
+    let mut t2_file = OpenOptions::new().read(true).write(true).create(true).open(&t2_path)?;
+    let mut t3_file = OpenOptions::new().read(true).write(true).create(true).open(&t3_path)?;
+
+    // Attempt recovery from journal *before* loading main indexes
+    Self::recover_from_journal(&mut journal_file, &mut t2_file, &mut t3_file)?;
+
+    let t2_mmap = unsafe { Mmap::map(&t2_file)? };
+
+    // Rebuild all indexes from the clean data files
+    let (primary_index, relationship_index, context_index, significance_index, type_index) =
+        Self::rebuild_indexes(&t3_path, &t2_path)?;
+    
+    println!("NLSE: StorageManager initialized.");
+    Ok(StorageManager {
+        journal_file,
+        t1_cache: HashMap::new(),
+        t3_file,
+        t2_file,
+        t2_mmap,
+        primary_index,
+        relationship_index,
+        context_index,
+        significance_index,
+        type_index, // <-- New index added
+    })
+}
+        
+        // --- JOURNALING PROTOCOL: Phase 1 (Log the intention to write to T2) ---
+        self.log_to_journal(JournalEntry::WriteT2(&encoded_atom))?;
+
+        // --- JOURNALING PROTOCOL: Phase 2 (Perform the actual action) ---
+        let data_len = encoded_atom.len() as u64;
+        let write_offset = self.t2_file.seek(SeekFrom::End(0))?;
         self.t2_file.write_all(&data_len.to_le_bytes())?;
         self.t2_file.write_all(&encoded_atom)?;
-        self.t2_file.sync_data()?;
-        
+        self.t2_file.sync_data()?; // Ensure the main data file is flushed to disk
+
+        // --- Update in-memory state AFTER successful disk write ---
         self.remap_t2()?;
         
+        // Update primary index
         self.primary_index.insert(atom.id, AtomLocation::T2(write_offset as usize));
         
+        // Update relationship index
         for rel in &atom.embedded_relationships {
             let entry = self.relationship_index.entry(rel.rel_type.clone()).or_default();
             if !entry.contains(&atom.id) {
                 entry.push(atom.id);
             }
         }
+    // Update type index
+    self.type_index
+        .entry(atom.label.clone())
+        .or_default()
+        .push(atom.id);
+        // Update context index
+        if let Some(context_id) = atom.context_id {
+            self.context_index
+                .entry(context_id)
+                .or_default()
+                .push(atom.id);
+        }
+        
+        
+    // --- EMOTIONAL AMPLIFICATION ---
+    // Calculate an emotional intensity score.
+    // This is a simple calculation based on deviation from baseline.
+    let mut intensity = 0.0;
+    let baseline_cortisol = 0.1;
+    let baseline_dopamine = 0.4;
+    
+    intensity += atom.emotional_resonance.get("cortisol").unwrap_or(&baseline_cortisol).abs_diff(baseline_cortisol) * 1.5; // Stress is highly memorable
+    intensity += atom.emotional_resonance.get("adrenaline").unwrap_or(&0.0).abs_diff(0.0) * 2.0; // Adrenaline is very memorable
+    intensity += atom.emotional_resonance.get("dopamine").unwrap_or(&baseline_dopamine).abs_diff(baseline_dopamine);
+    intensity += atom.emotional_resonance.get("oxytocin").unwrap_or(&0.0).abs_diff(0.0);
+    
+    // Boost the atom's significance based on emotional intensity.
+    // A base significance of 1.0 plus the intensity score.
+    let final_significance = atom.significance + intensity;
+    println!("[VALIDATION] Atom ID: {} -> Emotional Intensity: {:.2}, Final Significance: {:.2}", atom.id, intensity, final_significance);
+    
+    // Update significance index using the FINAL, boosted score.
+    self.significance_index.retain(|&(_, id)| id != atom.id);
+    self.significance_index.push((final_significance, atom.id));
+    self.significance_index.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));        
+        // Update significance index
+        self.significance_index.retain(|&(_, id)| id != atom.id);
+        
+        self.significance_index.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // --- JOURNALING PROTOCOL: Phase 3 (Clear the journal after a successful operation) ---
+        self.clear_journal()?;
+
         Ok(())
     }
-
     /// Reads an Atom, checking tiers T1 -> T2 -> T3, and promotes data upward.
     pub fn read_atom(&mut self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
         // --- T1 Cache Check ---
@@ -161,7 +296,9 @@ impl StorageManager {
     }
 
     // --- HELPER METHODS ---
-
+pub fn get_atoms_by_type(&self, atom_type: &AtomType) -> Option<&Vec<Uuid>> {
+    self.type_index.get(atom_type)
+}
     fn remap_t2(&mut self) -> io::Result<()> {
         self.t2_mmap = unsafe { Mmap::map(&self.t2_file)? }; Ok(())
     }
@@ -216,59 +353,104 @@ impl StorageManager {
         Ok(write_offset)
     }
 
-    fn rebuild_indexes<P: AsRef<Path>>(t3_path: P, t2_path: P) -> io::Result<(HashMap<Uuid, AtomLocation>, HashMap<RelationshipType, Vec<Uuid>>)> {
-        let mut primary = HashMap::new();
-        let mut relationship = HashMap::new();
-        
-        println!("NLSE: Rebuilding indexes...");
-        Self::scan_file_for_index(t3_path, AtomLocation::T3(0), &mut primary, &mut relationship)?;
-        Self::scan_file_for_index(t2_path, AtomLocation::T2(0), &mut primary, &mut relationship)?;
-        println!("NLSE: Index rebuild complete. {} total atoms loaded.", primary.len());
-        
-        Ok((primary, relationship))
-    }
+    fn rebuild_indexes<P: AsRef<Path>>(
+    t3_path: P,
+    t2_path: P,
+) -> io::Result<(
+    HashMap<Uuid, AtomLocation>,
+    HashMap<RelationshipType, Vec<Uuid>>,
+    HashMap<Uuid, Vec<Uuid>>,
+    Vec<(f32, Uuid)>,
+    HashMap<AtomType, Vec<Uuid>>, // <-- New return type
+)> {
+    let mut primary = HashMap::new();
+    let mut relationship = HashMap::new();
+    let mut context = HashMap::new();
+    let mut significance = Vec::new();
+    let mut types = HashMap::new(); // <-- New index map
+
+    println!("NLSE: Rebuilding all indexes...");
+    Self::scan_file_for_index(t3_path, AtomLocation::T3(0), &mut primary, &mut relationship, &mut context, &mut significance, &mut types)?;
+    Self::scan_file_for_index(t2_path, AtomLocation::T2(0), &mut primary, &mut relationship, &mut context, &mut significance, &mut types)?;
     
-    fn scan_file_for_index<P: AsRef<Path>>(
-        path: P, location_enum: AtomLocation, primary: &mut HashMap<Uuid, AtomLocation>, relationship: &mut HashMap<RelationshipType, Vec<Uuid>>
-    ) -> io::Result<()> {
-        let mut file = match File::open(path) { Ok(f) => f, Err(_) => return Ok(()) };
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+    significance.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let mut cursor = 0;
-        while cursor + 8 <= buffer.len() {
-            let atom_offset = cursor;
-            let mut len_bytes = [0u8; 8];
-            len_bytes.copy_from_slice(&buffer[cursor..cursor+8]);
-            let data_len = u64::from_le_bytes(len_bytes) as usize;
-            cursor += 8;
-            
-            if cursor + data_len > buffer.len() { break; }
-            let data_slice = &buffer[cursor..cursor + data_len];
-            let atom: NeuroAtom = match bincode::deserialize(data_slice) { Ok(a) => a, Err(_) => { cursor += data_len; continue; } };
-            
-            let location = match location_enum {
-                AtomLocation::T2(_) => AtomLocation::T2(atom_offset),
-                AtomLocation::T3(_) => AtomLocation::T3(atom_offset as u64),
-            };
-
-            primary.insert(atom.id, location); 
-            for rel in &atom.embedded_relationships {
-                let entry = relationship.entry(rel.rel_type.clone()).or_default();
-                if !entry.contains(&atom.id) { entry.push(atom.id); }
-            }
-            cursor += data_len;
-        }
-        Ok(())
-    }
+    println!("NLSE: Index rebuild complete. {} total atoms loaded.", primary.len());
+    
+    Ok((primary, relationship, context, significance, types))
 }
+    let mut primary = HashMap::new();
+    let mut relationship = HashMap::new();
+    let mut context = HashMap::new();
+    let mut significance = Vec::new();
 
+    println!("NLSE: Rebuilding indexes...");
+    Self::scan_file_for_index(t3_path, AtomLocation::T3(0), &mut primary, &mut relationship, &mut context, &mut significance)?;
+    Self::scan_file_for_index(t2_path, AtomLocation::T2(0), &mut primary, &mut relationship, &mut context, &mut significance)?;
+    
+    // Sort significance index after all atoms have been added
+    significance.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
-#[cfg(test)]
+    println!("NLSE: Index rebuild complete. {} total atoms loaded.", primary.len());
+    
+    Ok((primary, relationship, context, significance))
+}
+    
+fn scan_file_for_index<P: AsRef<Path>>(
+    path: P,
+    location_enum: AtomLocation,
+    primary: &mut HashMap<Uuid, AtomLocation>,
+    relationship: &mut HashMap<RelationshipType, Vec<Uuid>>,
+    context: &mut HashMap<Uuid, Vec<Uuid>>,
+    significance: &mut Vec<(f32, Uuid)>,
+    types: &mut HashMap<AtomType, Vec<Uuid>>, // <-- New parameter
+) -> io::Result<()> {
+    let mut file = match File::open(path) { Ok(f) => f, Err(_) => return Ok(()) };
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let mut cursor = 0;
+    while cursor + 8 <= buffer.len() {
+        let atom_offset = cursor;
+        let mut len_bytes = [0u8; 8];
+        len_bytes.copy_from_slice(&buffer[cursor..cursor+8]);
+        let data_len = u64::from_le_bytes(len_bytes) as usize;
+        cursor += 8;
+        
+        if cursor + data_len > buffer.len() { break; }
+        let data_slice = &buffer[cursor..cursor + data_len];
+        let atom: NeuroAtom = match bincode::deserialize(data_slice) { Ok(a) => a, Err(_) => { cursor += data_len; continue; } };
+        
+        let location = match location_enum {
+            AtomLocation::T2(_) => AtomLocation::T2(atom_offset),
+            AtomLocation::T3(_) => AtomLocation::T3(atom_offset as u64),
+        };
+
+        primary.insert(atom.id, location); 
+
+        for rel in &atom.embedded_relationships {
+            let entry = relationship.entry(rel.rel_type.clone()).or_default();
+            if !entry.contains(&atom.id) { entry.push(atom.id); }
+        }
+
+        if let Some(context_id) = atom.context_id {
+            context.entry(context_id).or_default().push(atom.id);
+        }
+        
+        significance.push((atom.significance, atom.id));
+        
+        // --- ADDED: Populate the new type index ---
+        types.entry(atom.label.clone()).or_default().push(atom.id);
+        
+        cursor += data_len;
+    }
+    Ok(())
+}#[cfg(test)]
 mod tests {
     use super::*;
     use crate::nlse_core::models::{NeuroAtom, Relationship, RelationshipType};
     use tempfile::tempdir;
+    use crate::nlse_core::storage_manager::JournalEntry;
     use std::thread;
     use std::time::Duration;
 
@@ -303,6 +485,49 @@ mod tests {
         
         // Use our robust assertion
         assert_atoms_are_logically_equal(&original_atom, &retrieved_atom);
+    }
+    #[test]
+    fn test_journal_recovery() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        
+        let atom = create_test_atom("Crash Test Atom", vec![]);
+        let encoded_atom = bincode::serialize(&atom).unwrap();
+
+        // --- Simulate a Crash ---
+        // Manually create the journal entry without committing to the main file.
+        {
+            let journal_path = dir_path.join("journal.log");
+            let mut journal_file = OpenOptions::new().write(true).create(true).open(&journal_path).unwrap();
+
+            // Create the log entry for a write to T2
+            let entry = JournalEntry::WriteT2(&encoded_atom);
+            let encoded_entry = bincode::serialize(&entry).unwrap();
+            journal_file.write_all(&encoded_entry).unwrap();
+            journal_file.sync_all().unwrap();
+        } // The journal file is now closed and saved, but brain_cache.db is empty.
+
+        // --- Attempt Recovery ---
+        // Create a new StorageManager instance. The `new` function should detect
+        // the journal entry and perform recovery.
+        let mut manager = StorageManager::new(&dir_path).unwrap();
+
+        // --- Validate Recovery ---
+        // 1. Check if the atom is now present in the manager.
+        let retrieved = manager.read_atom(atom.id).unwrap()
+            .expect("Atom should have been recovered from journal but was not found.");
+            
+        // 2. Assert its data is correct.
+        assert_atoms_are_logically_equal(&atom, &retrieved);
+        
+        // 3. Assert the atom is correctly located in T2.
+        let location = manager.primary_index.get(&atom.id).unwrap();
+        assert!(matches!(location, AtomLocation::T2(_)));
+        
+        // 4. Assert the journal file is now empty after recovery.
+        let journal_path = dir_path.join("journal.log");
+        let journal_metadata = std::fs::metadata(journal_path).unwrap();
+        assert_eq!(journal_metadata.len(), 0, "Journal file was not cleared after recovery.");
     }
 
     #[test]
