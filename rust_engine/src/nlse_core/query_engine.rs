@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use super::models::{NeuroAtom, RelationshipType};
 use super::storage_manager::StorageManager;
+use crate::nlse_core::models::AtomType;
 
 // --- Private LVE Logic, co-located with the engine ---
 fn get_contradiction_map() -> HashMap<RelationshipType, RelationshipType> {

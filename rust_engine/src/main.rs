@@ -4,8 +4,8 @@ use actix_web_prom::PrometheusMetricsBuilder;
 
 // Declare only the modules that are still used
 mod ace;        // Still used for ace::AceRequest
-// mod hsm;     // Logic moved to nlse_core::query_engine, only HsmRequest is needed
-// mod lve;     // Logic moved to nlse_core::query_engine, only LveRequest is needed
+mod hsm;     // Logic moved to nlse_core::query_engine, only HsmRequest is needed
+mod lve;     // Logic moved to nlse_core::query_engine, only LveRequest is needed
 mod nlse_core;  // Core library
 
 // Bring specific items into scope from nlse_core
@@ -14,8 +14,8 @@ use nlse_core::decay_agent::DecayAgent;
 use nlse_core::query_engine::{QueryEngine, ExecutionPlan}; // Correct path for QueryEngine and ExecutionPlan
 
 // Bring in request/response types from now unused modules if needed
-use hsm::HsmRequest; // Only used for the request struct
-use lve::LveRequest; // Only used for the request struct
+// use hsm::HsmRequest; // Only used for the request struct
+// use lve::LveRequest; // Only used for the request struct
 use ace::AceRequest; // Only used for the request struct
 
 // --- The shared application state ---

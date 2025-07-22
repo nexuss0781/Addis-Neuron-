@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write, Seek, SeekFrom, Read, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::collections::HashMap;
 use std::time::UNIX_EPOCH;
 use uuid::Uuid;
@@ -309,7 +309,7 @@ impl StorageManager {
                     self.t3_file.read_exact(&mut buffer)?;
                     Ok(Some(bincode::deserialize(&buffer).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?))
                 }
-            }
+                AtomLocation::T1 => todo!()
         } else {
             Ok(None)
         }
@@ -384,6 +384,7 @@ impl StorageManager {
             let location = match location_enum {
                 AtomLocation::T2(_) => AtomLocation::T2(atom_offset),
                 AtomLocation::T3(_) => AtomLocation::T3(atom_offset as u64),
+                AtomLocation::T1 => todo!()
             };
 
             primary.insert(atom.id, location); 
