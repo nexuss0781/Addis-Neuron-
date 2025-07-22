@@ -7,15 +7,16 @@ import argparse
 from typing import Dict, Any
 
 # --- CPEM Configuration ---
-BASE_DIR = os.getcwd() # Use current working directory
-PID_DIR = os.path.join(BASE_DIR, ".cpem", "pids")
-LOG_DIR = os.path.join(BASE_DIR, ".cpem", "logs")
+# Use absolute paths to ensure services know where to find everything,
+# regardless of how they are launched. This is critical for the Colab environment.
+BASE_DIR = "/content/project-agile-mind"
+CPEM_DIR = os.path.join(BASE_DIR, ".cpem")
+PID_DIR = os.path.join(CPEM_DIR, "pids")
+LOG_DIR = os.path.join(CPEM_DIR, "logs")
 
 SERVICES: Dict[str, Dict[str, Any]] = {
     "redis": {
-        "command": [
-            "redis-server", "--port", "6379", "--daemonize", "no", # Run in foreground for our manager
-        ],
+        "command": ["redis-server", "--port", "6379", "--daemonize", "no"],
         "pid_file": f"{PID_DIR}/redis.pid",
         "log_file": f"{LOG_DIR}/redis.log",
         "cwd": "/",
@@ -79,12 +80,12 @@ def down():
                 pid = int(f.read().strip())
             print(f"CPEM: Stopping service '{name}' (PID: {pid})...")
             os.kill(pid, signal.SIGTERM)
-            time.sleep(1) # Give it a moment to die
-            try: # Force kill if it's still alive
+            time.sleep(1)
+            try:
                 os.kill(pid, 0)
                 print(f"CPEM WARNING: Service '{name}' did not terminate gracefully. Sending SIGKILL.")
                 os.kill(pid, signal.SIGKILL)
-            except OSError: pass # Success
+            except OSError: pass
             os.remove(pid_file)
         except (FileNotFoundError, ProcessLookupError):
             if os.path.exists(pid_file): os.remove(pid_file)
@@ -114,20 +115,18 @@ def status():
     print("-" * 52)
 
 def logs(service_name, follow):
-    """Tails the logs of a specific service."""
     if service_name not in SERVICES:
         print(f"CPEM ERROR: Service '{service_name}' not found.")
         return
     log_file = SERVICES[service_name]["log_file"]
     if not os.path.exists(log_file):
-        print(f"Log file for '{service_name}' not found.")
+        print(f"Log file for '{service_name}' not found at {log_file}.")
         return
     
     if follow:
         print(f"--- Tailing logs for '{service_name}' (Ctrl+C to stop) ---")
         try:
             with open(log_file, "r") as f:
-                # Go to the end of the file
                 f.seek(0, 2)
                 while True:
                     line = f.readline()
@@ -143,27 +142,14 @@ def logs(service_name, follow):
             print(f.read())
 
 def execute(service_name, command_to_run):
-    """Executes a command in the context of a service."""
     if service_name not in SERVICES:
         print(f"CPEM ERROR: Service '{service_name}' not found.")
         return
-        
     config = SERVICES[service_name]
     print(f"--- Executing '{' '.join(command_to_run)}' in '{service_name}' context ---")
-    
-    proc = subprocess.run(
-        command_to_run,
-        cwd=config["cwd"],
-        capture_output=True, text=True
-    )
-    
-    if proc.stdout:
-        print("\n--- STDOUT ---")
-        print(proc.stdout)
-    if proc.stderr:
-        print("\n--- STDERR ---")
-        print(proc.stderr)
-    
+    proc = subprocess.run(command_to_run, cwd=config["cwd"], capture_output=True, text=True)
+    if proc.stdout: print(f"\n--- STDOUT ---\n{proc.stdout}")
+    if proc.stderr: print(f"\n--- STDERR ---\n{proc.stderr}")
     print(f"--- Command finished with exit code {proc.returncode} ---")
 
 # --- Main CLI Router ---
@@ -185,16 +171,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.command == "up":
-        up()
-    elif args.command == "down":
-        down()
-    elif args.command == "status":
-        status()
-    elif args.command == "logs":
-        logs(args.service_name, args.follow)
+    if args.command == "up": up()
+    elif args.command == "down": down()
+    elif args.command == "status": status()
+    elif args.command == "logs": logs(args.service_name, args.follow)
     elif args.command == "exec":
-        if not args.run_command:
-            print("CPEM ERROR: 'exec' requires a command to run.")
-        else:
-            execute(args.service_name, args.run_command)
+        if not args.run_command: print("CPEM ERROR: 'exec' requires a command to run.")
+        else: execute(args.service_name, args.run_command)
