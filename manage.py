@@ -28,7 +28,7 @@ SERVICES: Dict[str, Dict[str, Any]] = {
         "cwd": f"{BASE_DIR}/rust_engine",
     },
     "brain_api": {
-        "command": ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"],
+        "command": [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"],
         "pid_file": f"{PID_DIR}/brain_api.pid",
         "log_file": f"{LOG_DIR}/brain_api.log",
         "cwd": f"{BASE_DIR}/python_app",
