@@ -310,6 +310,7 @@ impl StorageManager {
                     Ok(Some(bincode::deserialize(&buffer).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?))
                 }
                 AtomLocation::T1 => todo!()
+            }
         } else {
             Ok(None)
         }
