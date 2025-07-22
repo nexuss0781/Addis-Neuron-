@@ -17,6 +17,7 @@ use nlse_core::query_engine::{QueryEngine, ExecutionPlan}; // Correct path for Q
 // use hsm::HsmRequest; // Only used for the request struct
 // use lve::LveRequest; // Only used for the request struct
 use ace::AceRequest; // Only used for the request struct
+use crate::hsm::HsmRequest;
 
 // --- The shared application state ---
 // Needs to hold the QueryEngine

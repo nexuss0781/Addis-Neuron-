@@ -119,7 +119,7 @@ impl QueryEngine {
                         return self.fail("Traverse failed: Source context key not found in T0 cache.");
                     }
                 }
-                              PlanStep::Write(mut atom_to_write) => {
+                              PlanStep::Write(atom_to_write) => {
                 // This 'Write' step now acts as an UPSERT (update or insert)
                 
                 if plan.mode == ExecutionMode::Hypothetical {
@@ -174,13 +174,16 @@ impl QueryEngine {
                         }
     
                     }
-                    if let Some(atom_ids) = manager.get_atoms_in_context(&context_id) {
-                        for id in atom_ids {
-                             // Avoid duplicates if already found in T0
-                            if !atoms.iter().any(|a| a.id == *id) {
-                                if let Ok(Some(atom)) = manager.read_atom(*id) {
-                                    atoms.push(atom);
-                                }
+                    let atom_ids_to_process = if let Some(ids) = manager.get_atoms_in_context(&context_id) {
+                        ids.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    for id in atom_ids_to_process {
+                         // Avoid duplicates if already found in T0
+                        if !atoms.iter().any(|a| a.id == id) {
+                            if let Ok(Some(atom)) = manager.read_atom(id) {
+                                atoms.push(atom);
                             }
                         }
                     }
@@ -189,11 +192,14 @@ impl QueryEngine {
                 
                 PlanStep::FetchByType { atom_type, context_key } => {
                 let mut atoms = Vec::new();
-                if let Some(atom_ids) = manager.get_atoms_by_type(&atom_type) {
-                    for id in atom_ids {
-                        if let Ok(Some(atom)) = manager.read_atom(*id) {
-                            atoms.push(atom);
-                        }
+                let atom_ids_to_process = if let Some(ids) = manager.get_atoms_by_type(&atom_type) {
+                    ids.clone()
+                } else {
+                    Vec::new()
+                };
+                for id in atom_ids_to_process {
+                    if let Ok(Some(atom)) = manager.read_atom(id) {
+                        atoms.push(atom);
                     }
                 }
                 t0_cache.insert(context_key, atoms);
