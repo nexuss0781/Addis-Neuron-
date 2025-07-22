@@ -42,4 +42,4 @@ def pre_execution_check(action_type: str, details: Dict[str, Any]) -> bool:
             return False
 
     # If no axioms are violated, the action is permitted.
-    return True
+    return True 

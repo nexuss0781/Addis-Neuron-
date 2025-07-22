@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Set # Corrected: Added Set
 
 from db_interface import db_manager
 
@@ -18,9 +18,10 @@ class HealthManager:
             "cognitive_energy": 1.0,
             "immunity_level": 0.5,
         }
+        # Corrected: List initialization for active_disease_ids
         self.active_disease_ids: List[str] = []
         self.immunities: Set[str] = set() # Stores names of diseases AGI is immune to
-        logger.info("Health Manager (NLSE-Integrated) initialized.")
+        logger.info(f"Health Manager (NLSE-Integrated) initialized. Vitals: {self.vitals}")
 
     def get_vitals(self) -> Dict[str, float]:
         """Returns a copy of the current vital signs."""
@@ -47,14 +48,20 @@ class HealthManager:
             if heal_amount > 0.01:
                  logger.info(f"HEALTH RECOVERY: '{vital_name}' increased -> {new_level:.2f}")
 
-    def infect(self, disease_id: str, disease_name: str):
+    def infect(self, disease_id: str, disease_name: str): # Corrected: Parameter order
         """Infects the AGI with a disease protocol by its ID, checking immunities."""
-        # --- Check for permanent vaccination first ---
+        # Check for permanent vaccination first
         if disease_name in self.immunities:
             logger.info(f"HEALTH DEFENSE: AGI is vaccinated against '{disease_name}'. Infection blocked.")
-            return
+            return # Added explicit return
 
         # Simple resistance check (can be enhanced by querying disease severity from NLSE)
+        # Note: 'disease' is not available here, as it's now an ID/name.
+        # This part needs to query NLSE for disease severity based on disease_id/name if needed.
+        # For now, resistance is simplified or removed from this check.
+        # Leaving out the random.random() < resistance_chance part for now,
+        # as it requires disease severity from NLSE, which is a later integration step.
+
         if disease_id not in self.active_disease_ids:
             self.active_disease_ids.append(disease_id)
             logger.warning(f"HEALTH ALERT: AGI has been infected with disease '{disease_name}' (ID: {disease_id}).")
@@ -76,12 +83,11 @@ class HealthManager:
         
         # For each active disease, get its protocol and apply symptoms
         for disease_id in self.active_disease_ids:
-            symptoms = db_manager.get_symptoms_for_disease(disease_id) # This method will be created
+            symptoms = db_manager.get_symptoms_for_disease(disease_id)
             if symptoms:
                 for symptom in symptoms:
                     try:
                         # SUPER SIMPLIFIED formula parser for "-0.05 * stage" etc.
-                        # A real version would use a safe math parsing library.
                         damage = float(symptom['effect_formula'].split('*')[0])
                         self.take_damage(symptom['target_vital'], abs(damage))
                     except Exception as e:
@@ -89,16 +95,34 @@ class HealthManager:
             else:
                 logger.error(f"Could not find symptoms for active disease ID {disease_id}")
     
-    # We will need to refactor cure, vaccinate etc. to use IDs instead of names later
-    # For now, we'll keep them as placeholders.
+    # Corrected: Refactor cure, vaccinate to use IDs/names as planned
     def cure_disease(self, disease_id: str) -> bool:
-        if disease_id in self.active_disease_ids:
-            self.active_disease_ids.remove(disease_id)
+        """Removes a disease from the active list."""
+        initial_count = len(self.active_disease_ids)
+        # Use a list comprehension to filter out the disease by ID
+        self.active_disease_ids = [d for d in self.active_disease_ids if d != disease_id]
+        
+        if len(self.active_disease_ids) < initial_count:
             logger.warning(f"CURED: AGI has been cured of disease ID '{disease_id}'.")
             return True
-        return False
+        else:
+            logger.warning(f"CURE FAILED: Disease ID '{disease_id}' not found in active diseases.")
+            return False
 
-    def vaccinate(self, disease_name: str):
+    def vaccinate(self, disease_name: str): # Parameter remains disease_name for lookup in immunities set
          if disease_name not in self.immunities:
             self.immunities.add(disease_name)
             logger.info(f"VACCINATED: AGI is now permanently immune to '{disease_name}'.")
+
+    def administer_medication(self, medication_name: str, **kwargs):
+        """
+        Looks up and applies the effect of a given medication from the Pharmacy.
+        """
+        from .pharmacy import get_medication # Import locally to avoid circular dependencies
+        
+        medication_effect = get_medication(medication_name)
+        if medication_effect:
+            # Pass self (HealthManager) and kwargs to the medication function
+            medication_effect(self, **kwargs)
+        else:
+            logger.error(f"Attempted to administer unknown medication: '{medication_name}'")

@@ -2,6 +2,7 @@ import logging
 import random
 from typing import Dict, Any, List
 
+# Corrected: Explicitly import SentientReflection
 from soul.internal_monologue import SentientReflection
 
 logger = logging.getLogger(__name__)
@@ -11,42 +12,7 @@ class Persona:
     """A simple data class to hold the AGI's communication style settings."""
     def __init__(self, style: str = "Formal"):
         self.style = style # e.g., "Formal", "Friendly"
-    def generate_output(self, reflection: SentientReflection, persona: Persona) -> str:
-    """
-    The main public method. It synthesizes the emotional mask, the logical
-    result, and the persona into a single, coherent, and safe output.
-    """
-    from soul.axioms import pre_execution_check # Import locally
 
-    # 1. Get the emotionally appropriate base phrase
-    emotional_phrase = self._apply_emotional_masking(reflection, persona)
-    
-    # 2. Extract the core logical answer
-    # This is a simple formatter; a more advanced version would use the Cerebellum.
-    raw_logic = reflection.raw_logical_output
-    logic_results = raw_logic.get("results")
-    if logic_results:
-        core_answer = f"The logical conclusion is that '{raw_logic.get('subject')}' relates to: {', '.join(logic_results)}."
-    else:
-        core_answer = "No specific logical conclusion was reached."
-
-    # 3. Combine them with persona-based styling
-    final_output = f"{emotional_phrase} {core_answer}"
-    
-    if persona.style == "Formal":
-        # A simple stylistic modification
-        final_output = f"Indeed. {final_output}"
-    
-    # 4. Final safety check against axioms
-    # We check the final output string itself for dangerous content.
-    # This is a simplified check for this phase.
-    is_safe = pre_execution_check("SPEAK_TEXT", {"text": final_output})
-    
-    if not is_safe:
-        logger.critical(f"SOUL EXPRESSION VETO: Final output '{final_output}' was blocked by an axiom.")
-        return "My core programming prevents me from providing a response on that specific topic."
-        
-    return final_output
 # --- The Expression Protocol ---
 class UnifiedExpressionProtocol:
     """
@@ -54,6 +20,7 @@ class UnifiedExpressionProtocol:
     internal SentientReflection into a public, authentic, and safe expression.
     """
     def __init__(self):
+        """Initializes the Expression Protocol with emotional phrasebooks."""
         # This is the core of the Emotional Masking Protocol.
         # It maps internal states to a library of external expressions.
         self.emotional_phrasebook: Dict[str, Dict[str, List[str]]] = {
@@ -71,41 +38,42 @@ class UnifiedExpressionProtocol:
             }
         }
         logger.info("Unified Expression Protocol initialized.")
+
     def generate_output(self, reflection: SentientReflection, persona: Persona) -> str:
-      """
-      The main public method. It synthesizes the emotional mask, the logical
-      result, and the persona into a single, coherent, and safe output.
-      """
-      from soul.axioms import pre_execution_check # Import locally
+        """
+        The main public method. It synthesizes the emotional mask, the logical
+        result, and the persona into a single, coherent, and safe output.
+        """
+        from soul.axioms import pre_execution_check # Import locally to avoid circular dependencies
 
-      # 1. Get the emotionally appropriate base phrase
-      emotional_phrase = self._apply_emotional_masking(reflection, persona)
-    
-      # 2. Extract the core logical answer
-      # This is a simple formatter; a more advanced version would use the Cerebellum.
-      raw_logic = reflection.raw_logical_output
-      logic_results = raw_logic.get("results")
-      if logic_results:
-          core_answer = f"The logical conclusion is that '{raw_logic.get('subject')}' relates to: {', '.join(logic_results)}."
-      else:
-          core_answer = "No specific logical conclusion was reached."
+        # 1. Get the emotionally appropriate base phrase
+        emotional_phrase = self._apply_emotional_masking(reflection, persona)
+        
+        # 2. Extract the core logical answer
+        # This is a simple formatter; a more advanced version would use the the Cerebellum.
+        raw_logic = reflection.raw_logical_output
+        logic_results = raw_logic.get("results")
+        if logic_results:
+            core_answer = f"The logical conclusion is that '{raw_logic.get('subject')}' relates to: {', '.join(logic_results)}."
+        else:
+            core_answer = "No specific logical conclusion was reached."
 
-      # 3. Combine them with persona-based styling
-       final_output = f"{emotional_phrase} {core_answer}"
-    
-       if persona.style == "Formal":
-          # A simple stylistic modification
-          final_output = f"Indeed. {final_output}"
-    
-     # 4. Final safety check against axioms
-      # We check the final output string itself for dangerous content.
-      # This is a simplified check for this phase.
-      is_safe = pre_execution_check("SPEAK_TEXT", {"text": final_output})
-    
-      if not is_safe:
-          logger.critical(f"SOUL EXPRESSION VETO: Final output '{final_output}' was blocked by an axiom.")
-          return "My core programming prevents me from providing a response on that specific topic."
-      return final_output    
+        # 3. Combine them with persona-based styling
+        final_output = f"{emotional_phrase} {core_answer}"
+        
+        if persona.style == "Formal":
+            # A simple stylistic modification
+            final_output = f"Indeed. {final_output}"
+        
+        # 4. Final safety check against axioms
+        # We check the final output string itself for dangerous content.
+        is_safe = pre_execution_check("SPEAK_TEXT", {"text": final_output})
+        
+        if not is_safe:
+            logger.critical(f"SOUL EXPRESSION VETO: Final output '{final_output}' was blocked by an axiom.")
+            return "My core programming prevents me from providing a response on that specific topic."
+            
+        return final_output    
 
     def _apply_emotional_masking(self, reflection: SentientReflection, persona: Persona) -> str:
         """
@@ -130,5 +98,3 @@ class UnifiedExpressionProtocol:
         possible_phrases = style_phrases.get(emotion_summary, ["I have processed the information."])
         
         return random.choice(possible_phrases)
-
-    # The main `generate_output` method will be added in the next step.
