@@ -3,212 +3,198 @@ import sys
 import subprocess
 import time
 import signal
+import argparse
 from typing import Dict, Any
 
 # --- CPEM Configuration ---
-# This dictionary is the heart of our process manager.
-# It defines all the services needed to run the AGI.
-
-# Define absolute paths within the Colab environment
-BASE_DIR = "/content/project-agile-mind"
-PID_DIR = "/content/pids"
-LOG_DIR = "/content/logs"
+BASE_DIR = os.getcwd() # Use current working directory
+PID_DIR = os.path.join(BASE_DIR, ".cpem", "pids")
+LOG_DIR = os.path.join(BASE_DIR, ".cpem", "logs")
 
 SERVICES: Dict[str, Dict[str, Any]] = {
     "redis": {
         "command": [
-            "redis-server",
-            "--daemonize", "yes",
-            "--port", "6379",
-            "--pidfile", f"{PID_DIR}/redis.pid",
-            "--logfile", f"{LOG_DIR}/redis.log",
+            "redis-server", "--port", "6379", "--daemonize", "no", # Run in foreground for our manager
         ],
         "pid_file": f"{PID_DIR}/redis.pid",
         "log_file": f"{LOG_DIR}/redis.log",
-        "health_check": ["redis-cli", "-p", "6379", "ping"],
-        "cwd": "/", # Working directory for the command
+        "cwd": "/",
     },
     "logical_engine": {
-        "command": [
-            f"{BASE_DIR}/rust_engine/target/release/logical_engine"
-        ],
+        "command": [f"{BASE_DIR}/rust_engine/target/release/logical_engine"],
         "pid_file": f"{PID_DIR}/logical_engine.pid",
         "log_file": f"{LOG_DIR}/logical_engine.log",
-        "health_check": ["curl", "-sf", "http://localhost:8002/health"],
         "cwd": f"{BASE_DIR}/rust_engine",
     },
     "brain_api": {
-        "command": [
-            "uvicorn",
-            "main:app",
-            "--host", "0.0.0.0",
-            "--port", "8001",
-        ],
+        "command": ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"],
         "pid_file": f"{PID_DIR}/brain_api.pid",
         "log_file": f"{LOG_DIR}/brain_api.log",
-        "health_check": ["curl", "-sf", "http://localhost:8001/health"],
         "cwd": f"{BASE_DIR}/python_app",
     },
-    # Prometheus and Grafana are omitted for now as they are complex to set up
-    # without Docker, but can be added later.
 }
 
-# --- Core Functions (to be implemented next) ---
-def up():
-    """
-    Starts all defined services as background processes.
-    """
-    print("CPEM: Starting all services...")
+# --- Core Functions ---
 
-    # 1. Ensure required directories exist
+def up():
+    print("CPEM: Starting all services...")
     os.makedirs(PID_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    # 2. Pre-flight check: Compile Rust code if binary doesn't exist
     rust_binary = SERVICES["logical_engine"]["command"][0]
     if not os.path.exists(rust_binary):
         print("CPEM: Rust binary not found. Compiling...")
-        compile_proc = subprocess.run(
-            "cargo build --release",
-            shell=True,
-            cwd=SERVICES["logical_engine"]["cwd"],
-            capture_output=True, text=True
-        )
+        compile_proc = subprocess.run("cargo build --release", shell=True, cwd=SERVICES["logical_engine"]["cwd"], capture_output=True, text=True)
         if compile_proc.returncode != 0:
-            print("CPEM ERROR: Failed to compile Rust engine.")
-            print(compile_proc.stderr)
+            print(f"CPEM ERROR: Failed to compile Rust engine.\n{compile_proc.stderr}")
             return
         print("CPEM: Rust engine compiled successfully.")
 
-    # 3. Iterate and launch each service
     for name, config in SERVICES.items():
-        pid_file = config["pid_file"]
-        
-        # Check if the service is already running
-        if os.path.exists(pid_file):
-            print(f"CPEM: Service '{name}' appears to be already running (PID file exists). Skipping.")
+        if os.path.exists(config["pid_file"]):
+            print(f"CPEM: Service '{name}' appears to be running. Skipping.")
             continue
-
         print(f"CPEM: Launching service '{name}'...")
         try:
-            # Open the log file for writing
-            with open(config["log_file"], "w") as log_file:
-                # Launch the command as a new process
-                process = subprocess.Popen(
-                    config["command"],
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT, # Redirect stderr to stdout
-                    cwd=config["cwd"],
-                    start_new_session=True # Detach from the current terminal
-                )
-            
-            # Write the new process ID to its pid file
-            with open(pid_file, "w") as f:
+            log_file = open(config["log_file"], "w")
+            process = subprocess.Popen(config["command"], stdout=log_file, stderr=subprocess.STDOUT, cwd=config["cwd"], start_new_session=True)
+            with open(config["pid_file"], "w") as f:
                 f.write(str(process.pid))
-            
             print(f"CPEM: Service '{name}' started with PID {process.pid}.")
-            time.sleep(1) # Give a moment for the service to initialize
-
         except Exception as e:
-            print(f"CPEM ERROR: Failed to start service '{name}'. Error: {e}")
-            # Attempt to clean up if something went wrong
+            print(f"CPEM ERROR: Failed to start '{name}'. Error: {e}")
             down()
             return
-    
     print("\nCPEM: All services launched.")
 
 def down():
-    """
-    Stops all defined services by reading their PID files.
-    """
     print("CPEM: Shutting down all services...")
-
-    # Iterate in reverse order of startup
     for name in reversed(list(SERVICES.keys())):
         config = SERVICES[name]
         pid_file = config["pid_file"]
-        
         if not os.path.exists(pid_file):
-            print(f"CPEM: Service '{name}' is not running (no PID file).")
             continue
-
         try:
             with open(pid_file, "r") as f:
                 pid = int(f.read().strip())
-            
             print(f"CPEM: Stopping service '{name}' (PID: {pid})...")
-            # Send a graceful termination signal
             os.kill(pid, signal.SIGTERM)
-
-            # Wait a moment to see if it terminates
-            time.sleep(1)
-
-            # Check if the process is gone. If not, forcefully kill it.
-            # This is a robust way to handle stubborn processes.
-            try:
-                os.kill(pid, 0) # This doesn't kill, just checks if the PID exists
+            time.sleep(1) # Give it a moment to die
+            try: # Force kill if it's still alive
+                os.kill(pid, 0)
                 print(f"CPEM WARNING: Service '{name}' did not terminate gracefully. Sending SIGKILL.")
                 os.kill(pid, signal.SIGKILL)
-            except OSError:
-                # This is the success case - the process is gone
-                pass
-
-            # Clean up the PID file
+            except OSError: pass # Success
             os.remove(pid_file)
-            print(f"CPEM: Service '{name}' stopped.")
-
-        except FileNotFoundError:
-            # This case is handled by the initial check, but is here for safety
-            continue
-        except ProcessLookupError:
-            print(f"CPEM: Process for service '{name}' not found (stale PID file). Cleaning up.")
-            os.remove(pid_file)
+        except (FileNotFoundError, ProcessLookupError):
+            if os.path.exists(pid_file): os.remove(pid_file)
         except Exception as e:
-            print(f"CPEM ERROR: Failed to stop service '{name}'. Error: {e}")
-
+            print(f"CPEM ERROR: Failed to stop '{name}'. Error: {e}")
     print("\nCPEM: Shutdown complete.")
 
 def status():
-    """
-    Checks and reports the status of all defined services.
-    """
     print("--- AGI Service Status ---")
-    print(f"{'SERVICE':<20} {'PID':<10} {'STATUS':<10}")
-    print("-" * 42)
-
+    print(f"{'SERVICE':<20} {'PID':<10} {'STATUS':<20}")
+    print("-" * 52)
     for name, config in SERVICES.items():
-        pid_file = config["pid_file"]
-        pid = None
-        current_status = "Stopped"
-
-        if os.path.exists(pid_file):
+        pid, current_status = "N/A", "Stopped"
+        if os.path.exists(config["pid_file"]):
             try:
-                with open(pid_file, "r") as f:
+                with open(config["pid_file"], "r") as f:
                     pid_str = f.read().strip()
                     if pid_str:
                         pid = int(pid_str)
-                
-                # Check if the process actually exists
-                # os.kill(pid, 0) will raise a ProcessLookupError if the PID is not running
-                # but will do nothing if it is.
-                os.kill(pid, 0)
-                current_status = "Running"
-            
+                        os.kill(pid, 0)
+                        current_status = "Running"
             except (ProcessLookupError, ValueError):
-                # The PID file is stale or corrupted.
                 current_status = "Stopped (Stale PID)"
-                pid = None # Clear PID as it's not valid
             except Exception as e:
-                current_status = f"Error: {e}"
-                pid = None
-        
-        pid_display = str(pid) if pid else "N/A"
-        print(f"{name:<20} {pid_display:<10} {current_status:<10}")
+                current_status = f"Error: {type(e).__name__}"
+        print(f"{name:<20} {str(pid):<10} {current_status:<20}")
+    print("-" * 52)
+
+def logs(service_name, follow):
+    """Tails the logs of a specific service."""
+    if service_name not in SERVICES:
+        print(f"CPEM ERROR: Service '{service_name}' not found.")
+        return
+    log_file = SERVICES[service_name]["log_file"]
+    if not os.path.exists(log_file):
+        print(f"Log file for '{service_name}' not found.")
+        return
     
-    print("-" * 42)
+    if follow:
+        print(f"--- Tailing logs for '{service_name}' (Ctrl+C to stop) ---")
+        try:
+            with open(log_file, "r") as f:
+                # Go to the end of the file
+                f.seek(0, 2)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        time.sleep(0.1)
+                        continue
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+        except KeyboardInterrupt:
+            print("\n--- Stopped tailing logs ---")
+    else:
+        with open(log_file, "r") as f:
+            print(f.read())
 
+def execute(service_name, command_to_run):
+    """Executes a command in the context of a service."""
+    if service_name not in SERVICES:
+        print(f"CPEM ERROR: Service '{service_name}' not found.")
+        return
+        
+    config = SERVICES[service_name]
+    print(f"--- Executing '{' '.join(command_to_run)}' in '{service_name}' context ---")
+    
+    proc = subprocess.run(
+        command_to_run,
+        cwd=config["cwd"],
+        capture_output=True, text=True
+    )
+    
+    if proc.stdout:
+        print("\n--- STDOUT ---")
+        print(proc.stdout)
+    if proc.stderr:
+        print("\n--- STDERR ---")
+        print(proc.stderr)
+    
+    print(f"--- Command finished with exit code {proc.returncode} ---")
 
-# --- Main CLI Router (to be implemented later) ---
+# --- Main CLI Router ---
 if __name__ == "__main__":
-    print("CPEM: AGI Process & Environment Manager")
-    # Argument parsing will be added in Phase B
+    parser = argparse.ArgumentParser(description="CPEM: AGI Process & Environment Manager for Colab.")
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
+
+    up_parser = subparsers.add_parser("up", help="Start all AGI services.")
+    down_parser = subparsers.add_parser("down", help="Stop all AGI services.")
+    status_parser = subparsers.add_parser("status", help="Check the status of all services.")
+    
+    logs_parser = subparsers.add_parser("logs", help="View logs for a specific service.")
+    logs_parser.add_argument("service_name", choices=SERVICES.keys(), help="The service to view logs for.")
+    logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log output.")
+
+    exec_parser = subparsers.add_parser("exec", help="Execute a command in a service's context.")
+    exec_parser.add_argument("service_name", choices=SERVICES.keys(), help="The service context to run in.")
+    exec_parser.add_argument("run_command", nargs=argparse.REMAINDER, help="The command to execute.")
+
+    args = parser.parse_args()
+
+    if args.command == "up":
+        up()
+    elif args.command == "down":
+        down()
+    elif args.command == "status":
+        status()
+    elif args.command == "logs":
+        logs(args.service_name, args.follow)
+    elif args.command == "exec":
+        if not args.run_command:
+            print("CPEM ERROR: 'exec' requires a command to run.")
+        else:
+            execute(args.service_name, args.run_command)
