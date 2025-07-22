@@ -5,7 +5,9 @@ import time
 import signal
 import argparse
 from typing import Dict, Any
-
+# Ensure Cargo's bin directory is in PATH for subprocesses
+# This is crucial for `cargo build` and `logical_engine` execution
+os.environ['PATH'] += ":" + os.path.join(os.path.expanduser("~"), ".cargo", "bin")
 # --- CPEM Configuration ---
 # Use absolute paths to ensure services know where to find everything.
 BASE_DIR = "/content/project-agile-mind" # Guaranteed path in Colab after cloning
@@ -63,12 +65,13 @@ def up():
         try:
             log_file = open(config["log_file"], "w")
             process = subprocess.Popen(
-                config["command"],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                cwd=config["cwd"],
-                start_new_session=True # Detach from the current terminal
-            )
+    config["command"],
+    stdout=log_file,
+    stderr=subprocess.STDOUT,
+    cwd=config["cwd"],
+    start_new_session=True, # Detach from the current terminal
+    env=os.environ.copy() # <-- Explicitly pass the current environment
+)
             with open(config["pid_file"], "w") as f:
                 f.write(str(process.pid))
             print(f"CPEM: Service '{name}' started with PID {process.pid}.")
