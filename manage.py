@@ -46,12 +46,12 @@ def up():
     rust_binary_path = SERVICES["logical_engine"]["command"][0]
     if not os.path.exists(rust_binary_path):
         print("CPEM: Rust binary not found. Compiling...")
-        compile_proc = subprocess.run(
-            "cargo build --release",
-            shell=True,
-            cwd=SERVICES["logical_engine"]["cwd"],
-            capture_output=True, text=True
-        )
+        cargo_path = os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo")
+compile_proc = subprocess.run(
+    [cargo_path, "build", "--release"], # Directly call the absolute path to cargo
+    cwd=SERVICES["logical_engine"]["cwd"],
+    capture_output=True, text=True
+)
         if compile_proc.returncode != 0:
             print(f"CPEM ERROR: Failed to compile Rust engine.\n{compile_proc.stderr}")
             return
