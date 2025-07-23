@@ -1,3 +1,5 @@
+# manage.py
+
 import os
 import sys
 import subprocess
@@ -40,6 +42,10 @@ SERVICES: Dict[str, Dict[str, Any]] = {
 # --- Core Functions ---
 
 def up():
+    """
+    Starts all defined services as background processes using a robust
+    double-fork or detached Popen call suitable for Colab.
+    """
     print("CPEM: Starting all services...")
     os.makedirs(PID_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -47,10 +53,8 @@ def up():
     rust_binary_path = SERVICES["logical_engine"]["command"][0]
     if not os.path.exists(rust_binary_path):
         print("CPEM: Rust binary not found. Compiling...")
-        cargo_path = os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo")
         compile_proc = subprocess.run(
-            [cargo_path, "build", "--release"],
-            cwd=SERVICES["logical_engine"]["cwd"],
+            "cargo build --release", shell=True, cwd=SERVICES["logical_engine"]["cwd"],
             capture_output=True, text=True
         )
         if compile_proc.returncode != 0:
@@ -60,27 +64,40 @@ def up():
 
     for name, config in SERVICES.items():
         if os.path.exists(config["pid_file"]):
-            print(f"CPEM: Service '{name}' appears to be already running (PID file exists). Skipping.")
+            print(f"CPEM: Service '{name}' appears to be already running. Skipping.")
             continue
+
         print(f"CPEM: Launching service '{name}'...")
         try:
-            log_file = open(config["log_file"], "w")
+            # --- CORRECTED PROCESS LAUNCH ---
+            # We open the log file handle here...
+            log_file_handle = open(config["log_file"], "w")
+            
+            # ...and pass it to Popen. The `start_new_session=True` is the key
+            # to detaching it from the current script's process group.
             process = subprocess.Popen(
                 config["command"],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
+                stdout=log_file_handle,
+                stderr=log_file_handle, # Redirect both to the same handle
                 cwd=config["cwd"],
-                start_new_session=True,
-                env=os.environ.copy()
+                start_new_session=True 
             )
+            
+            # After launching, we can close our script's reference to the handle.
+            # The child process still holds a valid reference to the open file.
+            log_file_handle.close()
+            
             with open(config["pid_file"], "w") as f:
                 f.write(str(process.pid))
+
             print(f"CPEM: Service '{name}' started with PID {process.pid}.")
             time.sleep(1)
+
         except Exception as e:
             print(f"CPEM ERROR: Failed to start service '{name}'. Error: {e}")
             down()
             return
+    
     print("\nCPEM: All services launched.")
 
 
