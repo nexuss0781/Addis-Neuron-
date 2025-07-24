@@ -56,8 +56,6 @@ def up():
         compile_command = "cargo build --release"
         print(f"DEBUG: Running compile command: '{compile_command}' in '{SERVICES['logical_engine']['cwd']}'")
         
-        # Use Popen with communicate() for robust, non-blocking compilation.
-        # This waits for the command to finish and captures all output.
         compile_process = subprocess.Popen(
             compile_command, shell=True, cwd=SERVICES["logical_engine"]["cwd"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -76,7 +74,6 @@ def up():
 
     # --- Step 2: Launch All Services ---
     for name, config in SERVICES.items():
-        # Check for and clean up stale PID files before launching
         if os.path.exists(config["pid_file"]):
             print(f"DEBUG: PID file '{config['pid_file']}' exists. Checking if process is active...")
             try:
@@ -92,31 +89,28 @@ def up():
         
         print(f"CPEM: Launching service '{name}'...")
         try:
-            # Open the log file handle...
             log_file_handle = open(config["log_file"], "w")
             
-            # ...and pass it to Popen. `start_new_session=True` is the key
-            # to detaching it from the current script's process group.
             process = subprocess.Popen(
                 config["command"],
                 stdout=log_file_handle,
-                stderr=log_file_handle, # Redirect both to the same handle
+                stderr=log_file_handle,
                 cwd=config["cwd"],
                 start_new_session=True,
                 env=os.environ.copy()
             )
             
-            # After launching, immediately close our script's reference to the handle.
-            # The child process still holds a valid reference to the open file.
-            # This is the definitive fix for the "hanging cell".
+            # --- THIS IS THE FIX ---
+            # Close our script's reference to the log file handle.
+            # The child process still holds a valid reference and can continue writing.
+            # This allows the parent script (and the Colab cell) to terminate.
             log_file_handle.close()
             
-            # Write the new process ID to its pid file
             with open(config["pid_file"], "w") as f:
                 f.write(str(process.pid))
 
             print(f"CPEM: Service '{name}' started successfully with PID {process.pid}.")
-            time.sleep(2) # Give a moment for initialization
+            time.sleep(2)
 
         except Exception as e:
             print(f"--- [CPEM: FATAL ERROR] ---")
