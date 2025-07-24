@@ -52,33 +52,49 @@ def up():
     # --- Step 1: Compile Rust Engine (if necessary) ---
     rust_binary_path = SERVICES["logical_engine"]["command"][0]
     if not os.path.exists(rust_binary_path):
-        print(f"DEBUG: Rust binary not found at '{rust_binary_path}'. Initiating compilation (this may take a few minutes)...")
+        print(f"DEBUG: Rust binary not found at '{rust_binary_path}'. Initiating compilation...")
         compile_command = "cargo build --release"
-        print(f"DEBUG: Running compile command: '{compile_command}' in '{SERVICES['logical_engine']['cwd']}'")
+        compile_log_path = os.path.join(LOG_DIR, "rust_compile.log")
         
-        compile_process = subprocess.Popen(
-            compile_command, shell=True, cwd=SERVICES["logical_engine"]["cwd"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=os.environ.copy()
-        )
-        stdout, stderr = compile_process.communicate()
+        print(f"DEBUG: Running compile command: '{compile_command}'. Output is being logged to '{compile_log_path}'.")
+        print("DEBUG: This may take several minutes. The script will continue after compilation finishes.")
 
-        if compile_process.returncode != 0:
+        try:
+            # THIS IS THE NEW ROBUST WAY: Redirect output to a file to prevent blocking
+            with open(compile_log_path, 'w') as compile_log_file:
+                compile_process = subprocess.Popen(
+                    compile_command, shell=True, cwd=SERVICES["logical_engine"]["cwd"],
+                    stdout=compile_log_file, stderr=compile_log_file,
+                    env=os.environ.copy()
+                )
+
+            # Now, wait for the compilation to finish.
+            return_code = compile_process.wait()
+            print(f"DEBUG: Compilation process finished with exit code: {return_code}")
+
+            if return_code != 0:
+                print(f"--- [CPEM: FATAL ERROR] ---")
+                print(f"Failed to compile Rust engine. Check the log for details:")
+                print(f"--- COMPILE LOG: {compile_log_path} ---")
+                with open(compile_log_path, 'r') as f:
+                    print(f.read())
+                print("--- END COMPILE LOG ---")
+                return
+            
+            print("CPEM: Rust engine compiled successfully.")
+        except Exception as e:
             print(f"--- [CPEM: FATAL ERROR] ---")
-            print(f"Failed to compile Rust engine. Exit code: {compile_process.returncode}")
-            if stdout: print(f"--- STDOUT --- \n{stdout}")
-            if stderr: print(f"--- STDERR --- \n{stderr}")
+            print(f"An unexpected error occurred during Rust compilation: {e}")
             return
-        
-        print("CPEM: Rust engine compiled successfully.")
+
 
     # --- Step 2: Launch All Services ---
+    print("\nDEBUG: Now proceeding to launch services...")
     for name, config in SERVICES.items():
         if os.path.exists(config["pid_file"]):
-            print(f"DEBUG: PID file '{config['pid_file']}' exists. Checking if process is active...")
             try:
                 with open(config["pid_file"], 'r') as f: pid = int(f.read().strip())
-                os.kill(pid, 0) # Check if process exists
+                os.kill(pid, 0)
                 print(f"CPEM: Service '{name}' (PID: {pid}) is already running. Skipping.")
                 continue
             except (ValueError, ProcessLookupError):
@@ -96,14 +112,11 @@ def up():
                 stdout=log_file_handle,
                 stderr=log_file_handle,
                 cwd=config["cwd"],
-                start_new_session=True,
+                start_new_session=True, # Detaches the process from the script's session
                 env=os.environ.copy()
             )
             
-            # --- THIS IS THE FIX ---
-            # Close our script's reference to the log file handle.
-            # The child process still holds a valid reference and can continue writing.
-            # This allows the parent script (and the Colab cell) to terminate.
+            # THE CRITICAL FIX FOR NOTEBOOKS: Close the parent's file handle.
             log_file_handle.close()
             
             with open(config["pid_file"], "w") as f:
@@ -120,8 +133,10 @@ def up():
             down()
             return
             
-    print("\n--- [CPEM: UP] All services launched successfully. ---")
+    print("\n--- [CPEM: UP] All services launched. Cell execution should now complete. ---")
 
+# (The rest of your script: down, status, logs, etc. remains the same)
+# ... paste the rest of your original script here ...
 def down():
     print("--- [CPEM: DOWN] Shutting down all services ---")
     for name in reversed(list(SERVICES.keys())):
