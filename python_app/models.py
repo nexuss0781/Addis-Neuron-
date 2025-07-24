@@ -18,11 +18,12 @@ class AtomType(str, Enum):
     DiseaseProtocol = "DiseaseProtocol" # From Health Enhancement
     Symptom = "Symptom"               # From Health Enhancement
     Medication = "Medication"         # From Health Enhancement
-
 class RelationshipType(str, Enum):
     IS_A = "IsA"
     HAS_PROPERTY = "HasProperty"
     PART_OF = "PartOf"
+    HAS_PART = "HasPart" # <-- ADD THIS LINE
+    #...
     CAUSES = "Causes"
     ACTION = "Action"
     LOCATION = "Location"

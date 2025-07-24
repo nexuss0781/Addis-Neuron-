@@ -13,15 +13,7 @@ pub enum AtomType {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RelationshipType {
-    IsA,
-    HasProperty,
-    PartOf,
-    Causes,
-    Action,
-    Location,
-    // --- Opposites for LVE ---
-    IsNotA,
-    LacksProperty,
+    IsA, HasProperty, PartOf, HasPart, Causes, Action, Location,IsNotA,LacksProperty,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
