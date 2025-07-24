@@ -516,8 +516,10 @@ class DatabaseManager:
             logger.info(f"Conceptual query for '{subject}' failed: I don't have a concept for that word.")
             return []
 
-        # [THE FIX] This is the new, robust, and correct ExecutionPlan for a query.
-        # It directly Fetches the start node and then Traverses from it.
+        # --- [THE FINAL FIX] ---
+        # This is the new, robust, and correct ExecutionPlan for a query.
+        # It directly Fetches the start node by its ID and then Traverses from it,
+        # which is the simplest and most reliable way to query.
         plan = {
             "steps": [
                 {"Fetch": {"id": subject_concept_id}},
@@ -529,6 +531,7 @@ class DatabaseManager:
             "mode": "Standard"
         }
 
+        # The URL is now correct thanks to our Master Setup patch.
         nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
         try:
             response = requests.post(nlse_url, json=plan)
@@ -553,11 +556,11 @@ class DatabaseManager:
 
                 return final_answers
             else:
-                # If the NLSE reports failure, return an empty list.
+                # If the NLSE reports failure, log it and return an empty list.
                 logger.warning(f"NLSE reported failure during query: {result.get('message')}")
                 return []
         except requests.RequestException as e:
             logger.error(f"Could not execute conceptual query plan on NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e        
+            raise ServiceUnavailable("NLSE service is unavailable.") from e
 # Create a singleton instance to be imported by other parts of the app
 db_manager = DatabaseManager()
