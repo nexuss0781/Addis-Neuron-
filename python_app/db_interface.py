@@ -301,64 +301,7 @@ class DatabaseManager:
         except requests.RequestException as e:
             logger.error(f"Could not send 'learn_word' plan to NLSE: {e}")
             raise ServiceUnavailable("NLSE service is unavailable.") from e
-
-    def query_fact(self, subject: str, relationship_type: str) -> list[str]:
-        """
-        REFACTORED for Conceptual Querying.
-        Finds the concept for a word, traverses the graph, then finds the word for the resulting concept.
-        """
-        # 1. Find the Concept ID for the subject word.
-        subject_word_key = f"word:{subject.lower()}"
-        subject_concept_id = self.name_to_uuid_cache.get(f"concept_for:{subject_word_key}")
-
-        if not subject_concept_id:
-            logger.info(f"Conceptual query for '{subject}' failed: I don't have a concept for that word.")
-            return []
-
-        # 2. This plan fetches the starting concept, traverses its relationships,
-        # and returns the resulting concepts.
-        plan = {
-            "steps": [
-                {"Fetch": {"id": subject_concept_id, "context_key": "subject_concept"}},
-                {"Traverse": {
-                    "from_context_key": "subject_concept",
-                    "rel_type": relationship_type.upper(),
-                    "output_key": "final"
-                }}
-            ],
-            "mode": "Standard"
-        }
-
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://logical_engine:8000") + "/nlse/execute-plan"
-        try:
-            response = requests.post(nlse_url, json=plan)
-            response.raise_for_status()
-            result = response.json()
-
-            if result.get("success"):
-                answer_concepts = result.get("atoms", [])
-
-                # 3. For each resulting concept, we must find its word label to give a string answer.
-                # This is a reverse lookup.
-                final_answers = []
-                for concept in answer_concepts:
-                    concept_id = concept.get("id")
-                    # Inefficiently scan the cache for the word that points to this concept ID.
-                    # A real implementation would use a reverse index in the NLSE.
-                    found_label = "UnknownConcept"
-                    for key, val in self.name_to_uuid_cache.items():
-                        if val == concept_id and key.startswith("concept_for:"):
-                            word_key = key.replace("concept_for:", "")
-                            found_label = word_key.replace("word:", "")
-                            break
-                    final_answers.append(found_label.capitalize())
-
-                return final_answers
-            return []
-        except requests.RequestException as e:
-            logger.error(f"Could not execute conceptual query plan on NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e
-
+            
     def find_knowledge_gap(self, limit: int = 1) -> List[str]:
         plan = {
             "steps": [{"FetchBySignificance": {"limit": limit, "context_key": "final"}}],
@@ -560,5 +503,61 @@ class DatabaseManager:
         # This returns a placeholder "valid" response, as the true
         # validation happens inside the NLSE during the 'learn_fact' call.
         return {"is_valid": True, "reason": "Validation is now handled by the NLSE on write."}
+        
+    def query_fact(self, subject: str, relationship_type: str) -> list[str]:
+        """
+        REFACTORED for Conceptual Querying.
+        Finds the concept for a word, traverses the graph, then finds the word for the resulting concept.
+        """
+        subject_word_key = f"word:{subject.lower()}"
+        subject_concept_id = self.name_to_uuid_cache.get(f"concept_for:{subject_word_key}")
+
+        if not subject_concept_id:
+            logger.info(f"Conceptual query for '{subject}' failed: I don't have a concept for that word.")
+            return []
+
+        # [THE FIX] This is the new, robust, and correct ExecutionPlan for a query.
+        # It directly Fetches the start node and then Traverses from it.
+        plan = {
+            "steps": [
+                {"Fetch": {"id": subject_concept_id}},
+                {"Traverse": {
+                    "relationship_type": relationship_type.upper(),
+                    "depth": 1
+                }}
+            ],
+            "mode": "Standard"
+        }
+
+        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
+        try:
+            response = requests.post(nlse_url, json=plan)
+            response.raise_for_status() # Will raise HTTPError for 4xx/5xx
+            result = response.json()
+
+            if result.get("success"):
+                answer_concepts = result.get("atoms", [])
+                
+                # Reverse lookup: find the word label for each resulting concept ID
+                final_answers = []
+                for concept in answer_concepts:
+                    concept_id = concept.get("id")
+                    found_label = "UnknownConcept"
+                    # Inefficiently scan the cache. A real system would use a reverse index in the NLSE.
+                    for key, val in self.name_to_uuid_cache.items():
+                        if val == concept_id and key.startswith("concept_for:"):
+                            word_key = key.replace("concept_for:", "")
+                            found_label = word_key.replace("word:", "")
+                            break
+                    final_answers.append(found_label.capitalize())
+
+                return final_answers
+            else:
+                # If the NLSE reports failure, return an empty list.
+                logger.warning(f"NLSE reported failure during query: {result.get('message')}")
+                return []
+        except requests.RequestException as e:
+            logger.error(f"Could not execute conceptual query plan on NLSE: {e}")
+            raise ServiceUnavailable("NLSE service is unavailable.") from e        
 # Create a singleton instance to be imported by other parts of the app
 db_manager = DatabaseManager()

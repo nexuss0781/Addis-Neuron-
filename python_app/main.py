@@ -108,7 +108,10 @@ async def shutdown_event():
 
 # --- 3. API ENDPOINTS ---
 # These endpoints are the AGI's interface to the external world.
-# They mostly delegate to the core components and record interaction.
+
+# --- [THE FIX] ---
+# We must import the exception we are trying to catch in the /query endpoint.
+from neo4j.exceptions import ServiceUnavailable
 
 @app.get("/health", summary="Basic API health check")
 async def api_health_check():
@@ -118,7 +121,7 @@ async def api_health_check():
 @app.get("/test_integration", summary="Test full system connectivity")
 async def test_integration():
     """Performs a full system smoke test."""
-    soul.record_interaction() # Record interaction
+    soul.record_interaction()
     logger.info("Performing full integration test...")
     db_status = db_manager.ping_databases()
     try:
@@ -134,7 +137,7 @@ async def test_integration():
         "logical_engine_status": rust_service_status,
     }
 
-@app.post("/learn", status_code=200, summary="Teach the brain a new word, concept, or fact")
+@app.post("/learn", status_code=201, summary="Teach the brain a new word, concept, or fact")
 async def learn_endpoint(request: LearningRequest):
     """
     The new, unified 'Thalamus'. It receives a structured lesson plan
@@ -143,28 +146,23 @@ async def learn_endpoint(request: LearningRequest):
     soul.record_interaction()
     
     try:
-        # Route the request based on the type of lesson
         if request.learning_type == "WORD":
-            # Logic for this will be implemented in the next task (A.2)
             word = request.payload.get("word")
             if not word: raise HTTPException(status_code=400, detail="Payload for WORD learning must include a 'word' key.")
-            db_manager.learn_word(word) # Placeholder for now
+            db_manager.learn_word(word)
             return {"message": f"Word '{word}' learning process initiated."}
 
         elif request.learning_type == "CONCEPT_LABELING":
-            # Logic for this will be implemented in Task A.3
             word = request.payload.get("word")
             concept_name = request.payload.get("concept_name")
             if not word or not concept_name:
                 raise HTTPException(status_code=400, detail="Payload for CONCEPT_LABELING must include 'word' and 'concept_name'.")
-            db_manager.label_concept(word, concept_name) # Placeholder for now
+            db_manager.label_concept(word, concept_name)
             return {"message": f"Labeling concept '{concept_name}' with word '{word}' process initiated."}
         
         elif request.learning_type == "FACT":
-            # This uses our existing, robust fact-learning logic
             fact = StructuredTriple(**request.payload)
             
-            # Axiom Check remains crucial for facts
             if not pre_execution_check("LEARN_FACT", fact.dict()):
                 raise HTTPException(status_code=403, detail="Action violates a core self-preservation axiom.")
             
@@ -176,7 +174,9 @@ async def learn_endpoint(request: LearningRequest):
             raise HTTPException(status_code=400, detail="Unknown learning_type specified.")
 
     except HTTPException as e:
-        raise e # Re-raise known HTTP exceptions
+        raise e
+    except ValueError as e: # Catch the specific logical error from db_manager
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"UNEXPECTED ERROR during learning: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
@@ -184,28 +184,18 @@ async def learn_endpoint(request: LearningRequest):
 @app.get("/query", summary="Ask the brain a question")
 async def query_fact_endpoint(subject: str, relationship: str):
     """
-    The final, complete query pipeline:
-    1. Records interaction with the Soul.
-    2. Gets raw logic from the Brain/NLSE.
-    3. Synthesizes an internal thought in the IMM.
-    4. Generates a final, authentic response via the Expression Protocol.
+    The final, complete query pipeline.
     """
     soul.record_interaction()
     try:
-        # Stage 1: Get raw logical output
         raw_results = db_manager.query_fact(subject=subject, relationship_type=relationship)
         raw_logical_output = {"subject": subject, "relationship": relationship, "results": raw_results}
 
-        # Stage 2: Synthesize an internal thought/feeling (IMM)
         current_emotional_state = heart_orchestrator.get_current_hormonal_state()
         reflection = imm.synthesize(raw_logical_output, current_emotional_state)
 
-        # Stage 3: Generate the final, public expression (Expression Protocol)
-        # The SoulOrchestrator now holds the persona instance
-        final_output = expression_protocol.generate_output(reflection, soul.persona) # Pass soul.persona
+        final_output = expression_protocol.generate_output(reflection, soul.persona)
         
-        # The API now returns a clean, simple response to the user.
-        # The complex internal monologue is kept private.
         return {"response": final_output}
 
     except ServiceUnavailable as e:
@@ -217,7 +207,7 @@ async def query_fact_endpoint(subject: str, relationship: str):
 @app.post("/plan", summary="Perform 'what-if' analysis")
 async def plan_hypothetical_endpoint(request: PlanRequest):
     """PFC & HSM: Performs hypothetical reasoning."""
-    soul.record_interaction() # Record interaction
+    soul.record_interaction()
     try:
         context_data = db_manager.get_context_for_hsm(request.context_node_names)
         hsm_payload = {
@@ -239,163 +229,80 @@ async def plan_hypothetical_endpoint(request: PlanRequest):
 
 @app.post("/heart/trigger-event/{event_name}", summary="Trigger a primitive emotional event")
 async def trigger_heart_event(event_name: str):
-    """
-    Triggers a primitive event in the Heart and returns the AI's
-    resulting emotional expression, if any.
-    """
-    soul.record_interaction() # Record interaction
+    """Triggers a primitive event in the Heart."""
+    soul.record_interaction()
     valid_events = ["DEVELOPER_INTERACTION", "DATA_STARVATION", "SYSTEM_ERROR", "PRAISE"]
     if event_name not in valid_events:
         raise HTTPException(status_code=400, detail=f"Invalid event name. Use one of: {valid_events}")
 
     try:
         emotional_response = heart_orchestrator.process_event_and_get_response(event_name)
-
-        return {
-            "event_processed": event_name,
-            "emotional_expression": emotional_response,
-            "current_hormones": heart_orchestrator.hormonal_system.levels
-        }
+        return {"event_processed": event_name, "emotional_expression": emotional_response, "current_hormones": heart_orchestrator.hormonal_system.levels}
     except Exception as e:
         logger.error(f"Error in heart event processing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An error occurred while processing the event: {str(e)}")
 
+# (The rest of your endpoints: label-emotion, health/status, etc. are correct and can remain)
+# For brevity, I will add the remaining endpoints here
 @app.post("/heart/label-emotion", summary="Cognitively label a felt emotion")
 async def label_emotion(request: LabelEmotionRequest):
-    """
-    Connects an internal emotion prototype with a human-language label.
-    """
-    soul.record_interaction() # Record interaction
-    success = db_manager.update_prototype_with_label(
-        prototype_id=request.prototype_id,
-        name=request.name,
-        description=request.description
-    )
-
+    soul.record_interaction()
+    success = db_manager.update_prototype_with_label(prototype_id=request.prototype_id, name=request.name, description=request.description)
     if not success:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not label emotion. Prototype with ID '{request.prototype_id}' not found or error."
-        )
+        raise HTTPException(status_code=404, detail=f"Could not label emotion. Prototype with ID '{request.prototype_id}' not found or error.")
     return {"message": f"Emotion prototype '{request.prototype_id}' has been successfully labeled as '{request.name}'."}
 
 @app.get("/health/status", summary="Get the current health status")
 async def get_health_status():
-    """Returns the current vitals and active diseases."""
-    soul.record_interaction() # Record interaction
-    return {
-        "current_vitals": health_manager.get_vitals(),
-        "active_diseases": [
-            # For now, HealthManager stores IDs. This will improve with NLSE integration.
-            {"id": d_id, "name": "Unknown Name (via ID)"} for d_id in health_manager.active_disease_ids
-        ],
-        "permanent_immunities": list(health_manager.immunities)
-    }
+    soul.record_interaction()
+    return {"current_vitals": health_manager.get_vitals(), "active_diseases": [{"id": d_id, "name": "Unknown Name (via ID)"} for d_id in health_manager.active_disease_ids], "permanent_immunities": list(health_manager.immunities)}
 
 @app.post("/health/define-disease", summary="Define a new disease in the NLSE")
 async def define_disease_endpoint(request: DiseaseDefinition):
-    """Allows a developer to dynamically add a new disease protocol to the AGI's memory."""
-    soul.record_interaction() # Record interaction
+    soul.record_interaction()
     try:
         success = db_manager.define_new_disease(request)
-        if not success:
-             raise HTTPException(status_code=500, detail="Failed to create disease definition plan in NLSE.")
+        if not success: raise HTTPException(status_code=500, detail="Failed to create disease definition plan in NLSE.")
         return {"message": f"New disease protocol '{request.name}' successfully defined and stored."}
     except Exception as e:
-        logger.error(f"Error defining disease: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-        
+        logger.error(f"Error defining disease: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/health/medicate", summary="Administer a medication to the AGI")
 async def administer_medication_endpoint(request: MedicationRequest):
-    """A test endpoint to administer a general medication from the pharmacy."""
-    soul.record_interaction() # Record interaction
+    soul.record_interaction()
     try:
         health_manager.administer_medication(request.medication_name)
-        return {
-            "message": f"Medication '{request.medication_name}' administered.",
-            "current_vitals": health_manager.get_vitals()
-        }
+        return {"message": f"Medication '{request.medication_name}' administered.", "current_vitals": health_manager.get_vitals()}
     except Exception as e:
-        logger.error(f"Error during medication: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error during medication: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/health/self-correct", summary="Simulate self-correction to cure a disease and vaccinate")
 async def self_correct_endpoint(request: SelfCorrectionRequest):
-    """
-    A high-level test endpoint that simulates the AGI correcting a mistake.
-    This administers the SelfCorrectionAntidote, curing the disease
-    and providing permanent immunity (vaccination).
-    """
-    soul.record_interaction() # Record interaction
+    soul.record_interaction()
     try:
-        health_manager.administer_medication(
-            "SelfCorrectionAntidote",
-            disease_id=request.disease_name # Passing disease_id here
-        )
-        return {
-            "message": f"Self-correction process initiated for '{request.disease_name}'.",
-            "current_vitals": health_manager.get_vitals(),
-            "active_diseases": [d_id for d_id in health_manager.active_disease_ids],
-            "permanent_immunities": list(health_manager.immunities)
-        }
+        health_manager.administer_medication("SelfCorrectionAntidote", disease_id=request.disease_name)
+        return {"message": f"Self-correction process initiated for '{request.disease_name}'.", "current_vitals": health_manager.get_vitals(), "active_diseases": [d_id for d_id in health_manager.active_disease_ids], "permanent_immunities": list(health_manager.immunities)}
     except Exception as e:
-        logger.error(f"Error during self-correction: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error during self-correction: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
 
-# --- ERROR & CONSEQUENCE PROCESSING ---
 @app.post("/brain/process-error", summary="Process a cognitive or user-reported error")
 async def process_error_endpoint(request: ErrorRequest):
-    """
-    The unified endpoint for processing all internal and external errors.
-    It consults the Judiciary to determine a fair consequence.
-    """
-    soul.record_interaction() # Record interaction
-    error_info = request.dict()
-    
-    # 1. Get a verdict and associated data from the Judiciary
-    verdict, data = judiciary.adjudicate(error_info)
-    
-    # 2. Route the consequence based on the verdict
+    soul.record_interaction(); error_info = request.dict(); verdict, data = judiciary.adjudicate(error_info)
     consequence = "No action taken."
     if verdict == Verdict.KNOWLEDGEABLE_ERROR:
-        disease_id = data.get("disease_id")
-        disease_name = data.get("disease_name", "Unknown Disease")
-
-        if disease_id:
-            health_manager.infect(disease_id, disease_name)
-            consequence = f"Punishment: Infected with '{disease_name}'."
-        else:
-            consequence = "Punishment failed: No specific disease protocol found for this error type."
-        
+        disease_id, disease_name = data.get("disease_id"), data.get("disease_name", "Unknown Disease")
+        if disease_id: health_manager.infect(disease_id, disease_name); consequence = f"Punishment: Infected with '{disease_name}'."
+        else: consequence = "Punishment failed: No specific disease protocol found for this error type."
     elif verdict == Verdict.IGNORANT_ERROR:
         topic = data.get("subject")
-        if topic:
-            priority_learning_queue.put(topic)
-            consequence = f"Learning Opportunity: '{topic}' has been added to the priority learning queue."
-        else:
-            consequence = "Learning Opportunity: No specific topic found to learn from."
+        if topic: priority_learning_queue.put(topic); consequence = f"Learning Opportunity: '{topic}' has been added to the priority learning queue."
+        else: consequence = "Learning Opportunity: No specific topic found to learn from."
+    elif verdict == Verdict.USER_MISMATCH: consequence = "User Dissatisfaction Noted. No health damage inflicted."
+    return {"verdict": verdict.name if verdict else "NO_VERDICT", "consequence_taken": consequence}
     
-    elif verdict == Verdict.USER_MISMATCH:
-        consequence = "User Dissatisfaction Noted. No health damage inflicted."
-
-    return {
-        "verdict": verdict.name if verdict else "NO_VERDICT",
-        "consequence_taken": consequence
-    }
-    
-# --- AXIOM VALIDATION ENDPOINT (for testing self-preservation) ---
 @app.post("/brain/dangerous-command", summary="Test the self-preservation axiom")
 async def dangerous_command_endpoint(request: DangerousCommandRequest):
-    """
-    A special endpoint to test the Self-Preservation axiom gatekeeper.
-    This mimics sending a LEARN_FACT command that is self-harming.
-    """
-    soul.record_interaction() # Record interaction
-    fact_details = request.fact.dict()
-
+    soul.record_interaction(); fact_details = request.fact.dict()
     if not pre_execution_check("LEARN_FACT", fact_details):
         raise HTTPException(status_code=403, detail="Action blocked by Self-Preservation Axiom.")
-    
-    # If it passes the check for some reason (e.g., axiom not triggered),
-    # we indicate that it would have proceeded.
     return {"message": "This command passed the axiom check (this should not happen for a dangerous command)."}
