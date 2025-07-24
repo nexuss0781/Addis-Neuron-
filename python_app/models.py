@@ -23,18 +23,16 @@ class RelationshipType(str, Enum):
     HAS_PROPERTY = "HasProperty"
     PART_OF = "PartOf"
     HAS_PART = "HasPart"
-    IS_LABEL_FOR = "IsLabelFor" # <-- ADD THIS LINE
-    #...
+    IS_LABEL_FOR = "IsLabelFor"
     CAUSES = "Causes"
     ACTION = "Action"
     LOCATION = "Location"
     IS_NOT_A = "IsNotA"
     LACKS_PROPERTY = "LacksProperty"
-    # From Health Enhancement
-    HAS_SYMPTOM = "HasSymptom" 
+    HAS_SYMPTOM = "HasSymptom"
     IS_CURED_BY = "IsCuredBy"
     HAS_CHAR_IN_SEQUENCE = "HasCharInSequence"
-    IS_LABEL_FOR = "IsLabelFor"    
+    IS_CAUSED_BY = "IsCausedBy" # Added for consistency
 
 
 class ExecutionMode(str, Enum):

@@ -86,7 +86,7 @@ soul = SoulOrchestrator(
 Instrumentator().instrument(app).expose(app)
 
 # Define constants
-LOGICAL_ENGINE_URL = "http://logical_engine:8000"
+LOGICAL_ENGINE_URL = "http://127.0.0.1:8000"
 
 
 # --- 2. APP LIFECYCLE EVENTS ---

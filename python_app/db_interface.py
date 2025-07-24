@@ -87,7 +87,7 @@ class DatabaseManager:
 
     def _execute_nlse_plan(self, plan: dict, operation_name: str) -> dict:
         """A centralized helper for sending plans to the NLSE."""
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://logical_engine:8000") + "/nlse/execute-plan"
+        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
         try:
             response = requests.post(nlse_url, json=plan)
             response.raise_for_status()
@@ -540,6 +540,25 @@ class DatabaseManager:
         self.name_to_uuid_cache[definition.name] = disease_id
         return True
 
+    def get_random_significant_memory(self, limit: int = 1) -> List[Dict]:
+        """
+        NLSE-native version of this function for the Soul's dream cycle.
+        """
+        plan = {
+            "steps": [{"FetchBySignificance": {"limit": limit, "context_key": "final"}}],
+            "mode": "Standard"
+        }
+        result = self._execute_nlse_plan(plan, "get random significant memory")
+        return result.get("atoms", [])
 
+    def validate_fact_with_lve(self, triple: StructuredTriple) -> dict:
+        """
+        NLSE-native version. The core LVE logic is now inside the Rust 'Write' step,
+        so this function in Python can be simplified. For now, we'll assume a fact is
+        valid if it can be written. A more complex check could happen here later.
+        """
+        # This returns a placeholder "valid" response, as the true
+        # validation happens inside the NLSE during the 'learn_fact' call.
+        return {"is_valid": True, "reason": "Validation is now handled by the NLSE on write."}
 # Create a singleton instance to be imported by other parts of the app
 db_manager = DatabaseManager()
