@@ -22,7 +22,8 @@ class RelationshipType(str, Enum):
     IS_A = "IsA"
     HAS_PROPERTY = "HasProperty"
     PART_OF = "PartOf"
-    HAS_PART = "HasPart" # <-- ADD THIS LINE
+    HAS_PART = "HasPart"
+    IS_LABEL_FOR = "IsLabelFor" # <-- ADD THIS LINE
     #...
     CAUSES = "Causes"
     ACTION = "Action"
