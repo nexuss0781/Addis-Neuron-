@@ -1,3 +1,4 @@
+import logging
 import os
 import redis
 from neo4j import GraphDatabase
@@ -33,6 +34,7 @@ class DatabaseManager:
 
         self.neo4j_driver = None
         self.redis_client = None
+        self.logger = logging.getLogger(__name__)
 
         # Temporary cache for mapping human-readable names to NLSE Uuids.
         self.name_to_uuid_cache: Dict[str, str] = {}

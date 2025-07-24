@@ -181,28 +181,18 @@ async def learn_endpoint(request: LearningRequest):
         logger.error(f"UNEXPECTED ERROR during learning: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
-@app.get("/query", summary="Ask the brain a question")
-async def query_fact_endpoint(subject: str, relationship: str):
-    """
-    The final, complete query pipeline.
-    """
-    soul.record_interaction()
+# REPLACE WITH THIS (The corrected version)
+@app.get("/query")
+async def query_endpoint(subject: str, relationship: str):
     try:
-        raw_results = db_manager.query_fact(subject=subject, relationship_type=relationship)
-        raw_logical_output = {"subject": subject, "relationship": relationship, "results": raw_results}
-
-        current_emotional_state = heart_orchestrator.get_current_hormonal_state()
-        reflection = imm.synthesize(raw_logical_output, current_emotional_state)
-
-        final_output = expression_protocol.generate_output(reflection, soul.persona)
-        
-        return {"response": final_output}
-
-    except ServiceUnavailable as e:
-        raise HTTPException(status_code=503, detail=f"Database service unavailable: {e}")
+        # The keyword argument is now 'relationship', which matches the function definition.
+        results = db_manager.query_fact(
+            subject=subject, relationship=relationship
+        )
+        return {"results": results}
     except Exception as e:
-        logger.error(f"UNEXPECTED ERROR during query: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        logger.error(f"Error during query for subject '{subject}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @app.post("/plan", summary="Perform 'what-if' analysis")
 async def plan_hypothetical_endpoint(request: PlanRequest):
