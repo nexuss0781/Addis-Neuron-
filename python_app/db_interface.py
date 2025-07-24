@@ -506,20 +506,26 @@ class DatabaseManager:
         
     def query_fact(self, subject: str, relationship_type: str) -> list[str]:
         """
-        REFACTORED for Conceptual Querying.
-        Finds the concept for a word, traverses the graph, then finds the word for the resulting concept.
+        [DEBUGGING VERSION]
+        This function has been modified to be extremely verbose to find the 400 Bad Request error.
         """
+        # --- [DEBUG] Start of the function ---
+        print("\n--- [DEBUG] ENTERING query_fact ---")
+        print(f"[DEBUG] Received query: subject='{subject}', relationship='{relationship_type}'")
+
+        # 1. Find the Concept ID for the subject word.
         subject_word_key = f"word:{subject.lower()}"
         subject_concept_id = self.name_to_uuid_cache.get(f"concept_for:{subject_word_key}")
 
+        print(f"[DEBUG] Looked up concept for '{subject_word_key}'. Found UUID: {subject_concept_id}")
+
         if not subject_concept_id:
+            print(f"[DEBUG] ABORTING: Concept UUID for '{subject}' not found in cache.")
             logger.info(f"Conceptual query for '{subject}' failed: I don't have a concept for that word.")
             return []
 
-        # --- [THE FINAL FIX] ---
-        # This is the new, robust, and correct ExecutionPlan for a query.
-        # It directly Fetches the start node by its ID and then Traverses from it,
-        # which is the simplest and most reliable way to query.
+        # 2. This plan fetches the starting concept, traverses its relationships,
+        # and returns the resulting concepts.
         plan = {
             "steps": [
                 {"Fetch": {"id": subject_concept_id}},
@@ -531,36 +537,52 @@ class DatabaseManager:
             "mode": "Standard"
         }
 
-        # The URL is now correct thanks to our Master Setup patch.
+        # --- [DEBUG] This is the most critical part ---
+        # We will print the exact JSON payload we are about to send.
+        import json
+        plan_json_string = json.dumps(plan, indent=4)
+        print("[DEBUG] Constructed the following ExecutionPlan to send to NLSE:")
+        print(plan_json_string)
+
         nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
+        print(f"[DEBUG] Sending POST request to URL: {nlse_url}")
+
         try:
             response = requests.post(nlse_url, json=plan)
+            print(f"[DEBUG] NLSE responded with Status Code: {response.status_code}")
             response.raise_for_status() # Will raise HTTPError for 4xx/5xx
             result = response.json()
+            print(f"[DEBUG] NLSE response JSON: {result}")
+
 
             if result.get("success"):
                 answer_concepts = result.get("atoms", [])
-                
-                # Reverse lookup: find the word label for each resulting concept ID
                 final_answers = []
                 for concept in answer_concepts:
                     concept_id = concept.get("id")
                     found_label = "UnknownConcept"
-                    # Inefficiently scan the cache. A real system would use a reverse index in the NLSE.
                     for key, val in self.name_to_uuid_cache.items():
                         if val == concept_id and key.startswith("concept_for:"):
                             word_key = key.replace("concept_for:", "")
                             found_label = word_key.replace("word:", "")
                             break
                     final_answers.append(found_label.capitalize())
-
+                
+                print(f"[DEBUG] Successfully processed response. Final answers: {final_answers}")
+                print("--- [DEBUG] EXITING query_fact ---\n")
                 return final_answers
             else:
-                # If the NLSE reports failure, log it and return an empty list.
-                logger.warning(f"NLSE reported failure during query: {result.get('message')}")
+                print(f"[DEBUG] NLSE reported failure. Message: {result.get('message')}")
+                print("--- [DEBUG] EXITING query_fact ---\n")
                 return []
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
+            print("[DEBUG] An exception occurred while contacting the NLSE.")
+            # --- [DEBUG] If the request failed, we print the server's response text ---
+            if e.response is not None:
+                print(f"[DEBUG] Server Response Body causing 400/500 error: {e.response.text}")
+            
             logger.error(f"Could not execute conceptual query plan on NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e
+            print("--- [DEBUG] EXITING query_fact due to exception ---\n")
+            raise ServiceUnavailable("NLSE service is cooked.") from e
 # Create a singleton instance to be imported by other parts of the app
 db_manager = DatabaseManager()
