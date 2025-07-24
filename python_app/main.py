@@ -37,7 +37,8 @@ from models import (
     DamageRequest,
     DiseaseRequest,
     MedicationRequest,
-    SelfCorrectionRequest, # Corrected: SelfCorrectionRequ to SelfCorrectionRequest
+    SelfCorrectionRequest,
+    LearningRequest,# Corrected: SelfCorrectionRequ to SelfCorrectionRequest
     ErrorRequest,
     DiseaseDefinition,
     DangerousCommandRequest # For testing self-preservation
@@ -133,25 +134,51 @@ async def test_integration():
         "logical_engine_status": rust_service_status,
     }
 
-@app.post("/learn", status_code=201, summary="Teach the brain a new fact")
-async def learn_fact_endpoint(triple: StructuredTriple):
-    """Thalamus: Validates and learns a new structured fact."""
-    soul.record_interaction() # Record interaction
-
-    # --- SOUL: Self-Preservation Axiom Check ---
-    if not pre_execution_check("LEARN_FACT", triple.dict()):
-        raise HTTPException(status_code=403, detail="Action blocked by Self-Preservation Axiom.")
-        
+@app.post("/learn", status_code=200, summary="Teach the brain a new word, concept, or fact")
+async def learn_endpoint(request: LearningRequest):
+    """
+    The new, unified 'Thalamus'. It receives a structured lesson plan
+    and routes it to the appropriate cognitive function for learning.
+    """
+    soul.record_interaction()
+    
     try:
-        db_manager.learn_fact(triple)
-        soul.record_new_fact() # Record that new knowledge was acquired
-        return {"message": "Fact validated and learned successfully", "fact": triple}
-    except ServiceUnavailable as e:
-        raise HTTPException(status_code=503, detail=f"Database service unavailable: {e}")
+        # Route the request based on the type of lesson
+        if request.learning_type == "WORD":
+            # Logic for this will be implemented in the next task (A.2)
+            word = request.payload.get("word")
+            if not word: raise HTTPException(status_code=400, detail="Payload for WORD learning must include a 'word' key.")
+            db_manager.learn_word(word) # Placeholder for now
+            return {"message": f"Word '{word}' learning process initiated."}
+
+        elif request.learning_type == "CONCEPT_LABELING":
+            # Logic for this will be implemented in Task A.3
+            word = request.payload.get("word")
+            concept_name = request.payload.get("concept_name")
+            if not word or not concept_name:
+                raise HTTPException(status_code=400, detail="Payload for CONCEPT_LABELING must include 'word' and 'concept_name'.")
+            db_manager.label_concept(word, concept_name) # Placeholder for now
+            return {"message": f"Labeling concept '{concept_name}' with word '{word}' process initiated."}
+        
+        elif request.learning_type == "FACT":
+            # This uses our existing, robust fact-learning logic
+            fact = StructuredTriple(**request.payload)
+            
+            # Axiom Check remains crucial for facts
+            if not pre_execution_check("LEARN_FACT", fact.dict()):
+                raise HTTPException(status_code=403, detail="Action violates a core self-preservation axiom.")
+            
+            db_manager.learn_fact(fact)
+            soul.record_new_fact()
+            return {"message": "Fact validated and learned successfully", "fact": fact}
+        
+        else:
+            raise HTTPException(status_code=400, detail="Unknown learning_type specified.")
+
     except HTTPException as e:
-        raise e # Re-raise known HTTP exceptions (e.g. from LVE validation)
+        raise e # Re-raise known HTTP exceptions
     except Exception as e:
-        logger.error(f"UNEXPECTED ERROR during learn: {e}", exc_info=True)
+        logger.error(f"UNEXPECTED ERROR during learning: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 @app.get("/query", summary="Ask the brain a question")

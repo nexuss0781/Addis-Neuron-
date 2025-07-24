@@ -5,10 +5,15 @@ from typing import List, Union, Dict, Any
 from enum import Enum
 
 # --- Core Enums (must match Rust definitions) ---
-
+class LearningType(str, Enum):
+    WORD = "WORD"
+    CONCEPT_LABELING = "CONCEPT_LABELING"
+    FACT = "FACT"
+    
 class AtomType(str, Enum):
     Concept = "Concept"
     Word = "Word"
+    Character = "Character" 
     MetaConcept = "MetaConcept"
     DiseaseProtocol = "DiseaseProtocol" # From Health Enhancement
     Symptom = "Symptom"               # From Health Enhancement
@@ -26,7 +31,8 @@ class RelationshipType(str, Enum):
     # From Health Enhancement
     HAS_SYMPTOM = "HasSymptom" 
     IS_CURED_BY = "IsCuredBy"
-    IS_CAUSED_BY = "IsCausedBy"
+    HAS_CHAR_IN_SEQUENCE = "HasCharInSequence"
+    IS_LABEL_FOR = "IsLabelFor"    
 
 
 class ExecutionMode(str, Enum):
@@ -198,6 +204,26 @@ class DangerousCommandRequest(BaseModel):
                     "subject": "my core self",
                     "relationship": "action",
                     "object": "delete now"
+                }
+            }
+        }
+
+class LearningRequest(BaseModel):
+    """
+    A new, versatile request body for the /learn endpoint that allows
+    for different types of lessons.
+    """
+    learning_type: LearningType
+    payload: Dict[str, Any]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "learning_type": "FACT",
+                "payload": {
+                    "subject": "Socrates",
+                    "relationship": "IS_A",
+                    "object": "Man"
                 }
             }
         }
