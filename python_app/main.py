@@ -22,7 +22,7 @@ from heart.crystallizer import EmotionCrystallizer
 
 # Health
 from health.manager import HealthManager
-from health.pathogens import get_disease_by_name # Used by process_error_endpoint
+
 from health.judiciary import judiciary, Verdict
 
 # Soul (NEW MASTER ORCHESTRATOR)
