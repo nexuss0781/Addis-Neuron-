@@ -168,7 +168,7 @@ async def learn_endpoint(request: LearningRequest):
             if not pre_execution_check("LEARN_FACT", fact.dict()):
                 raise HTTPException(status_code=403, detail="Action violates a core self-preservation axiom.")
             
-            db_manager.learn_fact(fact)
+            db_manager.learn_fact(fact, heart_orchestrator)
             soul.record_new_fact()
             return {"message": "Fact validated and learned successfully", "fact": fact}
         

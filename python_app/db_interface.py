@@ -100,7 +100,7 @@ class DatabaseManager:
             logger.error(f"Could not execute '{operation_name}' plan on NLSE: {e}")
             raise ServiceUnavailable("NLSE service is unavailable.") from e
 
-    def learn_fact(self, triple: StructuredTriple) -> None:
+    def learn_fact(self, triple: StructuredTriple, heart_orchestrator) -> None:
         """
         REFACTORED for Conceptual Learning.
         Translates a fact about words into a fact about concepts.
@@ -127,7 +127,7 @@ class DatabaseManager:
             raise ValueError(msg)  # Raise an error to be caught by the API
 
         # 2. Get current emotional context from the Heart
-        from heart.orchestrator import heart_orchestrator
+        
         current_emotional_state = heart_orchestrator.get_current_hormonal_state()
 
         # 3. Create the relationship between the two CONCEPTS
