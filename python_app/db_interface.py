@@ -504,85 +504,62 @@ class DatabaseManager:
         # validation happens inside the NLSE during the 'learn_fact' call.
         return {"is_valid": True, "reason": "Validation is now handled by the NLSE on write."}
         
-    def query_fact(self, subject: str, relationship_type: str) -> list[str]:
-        """
-        [DEBUGGING VERSION]
-        This function has been modified to be extremely verbose to find the 400 Bad Request error.
-        """
-        # --- [DEBUG] Start of the function ---
-        print("\n--- [DEBUG] ENTERING query_fact ---")
-        print(f"[DEBUG] Received query: subject='{subject}', relationship='{relationship_type}'")
-
-        # 1. Find the Concept ID for the subject word.
-        subject_word_key = f"word:{subject.lower()}"
-        subject_concept_id = self.name_to_uuid_cache.get(f"concept_for:{subject_word_key}")
-
-        print(f"[DEBUG] Looked up concept for '{subject_word_key}'. Found UUID: {subject_concept_id}")
-
-        if not subject_concept_id:
-            print(f"[DEBUG] ABORTING: Concept UUID for '{subject}' not found in cache.")
-            logger.info(f"Conceptual query for '{subject}' failed: I don't have a concept for that word.")
+    def query_fact(self, subject: str, relationship: str) -> List[str]:
+        self.logger.debug("--- [DEBUG] ENTERING query_fact ---")
+        self.logger.debug(f"[DEBUG] Received query: subject='{subject}', relationship='{relationship}'")
+        
+        subject_uuid = self.get_uuid_for_name(subject)
+        if not subject_uuid:
+            self.logger.warning(f"Query failed: Concept for word '{subject}' is unknown.")
             return []
+        self.logger.debug(f"[DEBUG] Looked up concept for 'word:{subject.lower()}'. Found UUID: {subject_uuid}")
 
-        # 2. This plan fetches the starting concept, traverses its relationships,
-        # and returns the resulting concepts.
+        relationship_type = relationship.upper()
+        
+        # --- THIS IS THE CORRECT, 2-STEP EXECUTION PLAN ---
+        # It now includes the required 'context_key' field in the Fetch step.
         plan = {
             "steps": [
-                {"Fetch": {"id": subject_concept_id}},
-                {"Traverse": {
-                    "relationship_type": relationship_type.upper(),
-                    "depth": 1
-                }}
+                {
+                    "Fetch": {
+                        "id": subject_uuid,
+                        "context_key": "start_node" # THE MISSING FIELD
+                    }
+                },
+                {
+                    "Traverse": {
+                        "from_context_key": "start_node",
+                        "rel_type": relationship_type,
+                        "output_key": "final",
+                        # depth is not in your new Traverse struct, so we remove it
+                    }
+                }
             ],
             "mode": "Standard"
         }
 
-        # --- [DEBUG] This is the most critical part ---
-        # We will print the exact JSON payload we are about to send.
-        import json
-        plan_json_string = json.dumps(plan, indent=4)
-        print("[DEBUG] Constructed the following ExecutionPlan to send to NLSE:")
-        print(plan_json_string)
-
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
-        print(f"[DEBUG] Sending POST request to URL: {nlse_url}")
+        self.logger.debug(f"[DEBUG] Constructed the following ExecutionPlan to send to NLSE:\n{json.dumps(plan, indent=4)}")
 
         try:
-            response = requests.post(nlse_url, json=plan)
-            print(f"[DEBUG] NLSE responded with Status Code: {response.status_code}")
-            response.raise_for_status() # Will raise HTTPError for 4xx/5xx
-            result = response.json()
-            print(f"[DEBUG] NLSE response JSON: {result}")
-
-
-            if result.get("success"):
-                answer_concepts = result.get("atoms", [])
-                final_answers = []
-                for concept in answer_concepts:
-                    concept_id = concept.get("id")
-                    found_label = "UnknownConcept"
-                    for key, val in self.name_to_uuid_cache.items():
-                        if val == concept_id and key.startswith("concept_for:"):
-                            word_key = key.replace("concept_for:", "")
-                            found_label = word_key.replace("word:", "")
-                            break
-                    final_answers.append(found_label.capitalize())
-                
-                print(f"[DEBUG] Successfully processed response. Final answers: {final_answers}")
-                print("--- [DEBUG] EXITING query_fact ---\n")
-                return final_answers
+            result = self._execute_nlse_plan(plan, "query fact")
+            if result and result.get("success"):
+                self.logger.debug("[DEBUG] NLSE query successful.")
+                # Extract the 'name' property from each atom in the results
+                names = [
+                    atom.get("properties", {}).get("name", {}).get("String")
+                    for atom in result.get("atoms", [])
+                    if atom.get("properties", {}).get("name", {}).get("String")
+                ]
+                self.logger.debug(f"--- [DEBUG] EXITING query_fact with results: {names} ---")
+                return names
             else:
-                print(f"[DEBUG] NLSE reported failure. Message: {result.get('message')}")
-                print("--- [DEBUG] EXITING query_fact ---\n")
+                error_message = result.get('message', 'Unknown error')
+                self.logger.error(f"NLSE query execution failed. Message: {error_message}")
+                self.logger.debug("--- [DEBUG] EXITING query_fact due to NLSE failure ---")
                 return []
-        except requests.exceptions.RequestException as e:
-            print("[DEBUG] An exception occurred while contacting the NLSE.")
-            # --- [DEBUG] If the request failed, we print the server's response text ---
-            if e.response is not None:
-                print(f"[DEBUG] Server Response Body causing 400/500 error: {e.response.text}")
-            
-            logger.error(f"Could not execute conceptual query plan on NLSE: {e}")
-            print("--- [DEBUG] EXITING query_fact due to exception ---\n")
-            raise ServiceUnavailable("NLSE service is cooked.") from e
+        except Exception as e:
+            self.logger.error(f"Critical error during NLSE query: {e}", exc_info=True)
+            self.logger.debug("--- [DEBUG] EXITING query_fact due to exception ---")
+            return []
 # Create a singleton instance to be imported by other parts of the app
 db_manager = DatabaseManager()
