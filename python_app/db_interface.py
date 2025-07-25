@@ -572,6 +572,31 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
             return []
+            
+    def get_uuid_for_name(self, name: str) -> Optional[str]:
+        """
+        Resolves a human-readable name to its corresponding UUID using the in-memory cache.
+        This is a critical helper for building ExecutionPlans for the NLSE.
+        It intelligently checks for different key formats (e.g., 'concept:name').
+        """
+        name_lower = name.lower()
+        
+        # Define the order of keys to check, from most specific to least
+        keys_to_try = [
+            f"concept:{name_lower}",
+            f"word:{name_lower}",
+            f"concept_for:word:{name_lower}", # Check for this specific mapping
+            name_lower # Fallback for keys that might not have a prefix
+        ]
+        
+        for key in keys_to_try:
+            if key in self.name_to_uuid_cache:
+                uuid = self.name_to_uuid_cache[key]
+                self.logger.debug(f"Cache hit: Found UUID '{uuid}' for key '{key}'.")
+                return uuid
+        
+        self.logger.warning(f"Cache miss: Could not find UUID for name '{name}' in cache.")
+        return None            
 # --- SINGLETON INSTANCE ---
 # Create a single, shared instance of the DatabaseManager to be imported by other modules.
 db_manager = DatabaseManager()
