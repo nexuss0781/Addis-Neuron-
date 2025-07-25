@@ -252,50 +252,6 @@ class DatabaseManager:
         }
         self._execute_nlse_plan(plan, "learn conceptual fact")
 
-    def query_fact(self, subject: str, relationship: str) -> List[str]:
-        """Queries the NLSE for facts by traversing from a subject concept."""
-        self.logger.debug(f"Querying for '{subject}' -{relationship}-> ?")
-
-        subject_uuid = self.get_uuid_for_name(subject)
-        if not subject_uuid:
-            self.logger.warning(f"Query failed: Concept for word '{subject}' is unknown.")
-            return []
-
-        # Build a two-step plan: 1. Fetch the starting atom, 2. Traverse from it.
-        plan = {
-            "steps": [
-                {"Fetch": {"id": subject_uuid, "context_key": "start_node"}},
-                {
-                    "Traverse": {
-                        "from_context_key": "start_node",
-                        "rel_type": relationship.upper(),
-                        "output_key": "final",
-                    }
-                }
-            ],
-            "mode": ExecutionMode.STANDARD.value
-        }
-        self.logger.debug(f"Constructed ExecutionPlan:\n{json.dumps(plan, indent=2)}")
-
-        try:
-            result = self._execute_nlse_plan(plan, "query fact")
-            if result and result.get("success"):
-                # Extract the 'name' property from each resulting atom
-                names = [
-                    atom.get("properties", {}).get("name", {}).get("String")
-                    for atom in result.get("atoms", [])
-                    if atom.get("properties", {}).get("name", {}).get("String")
-                ]
-                self.logger.debug(f"Query successful. Results: {names}")
-                return names
-            else:
-                error_message = result.get('message', 'Unknown error')
-                self.logger.error(f"NLSE query execution failed: {error_message}")
-                return []
-        except Exception as e:
-            self.logger.error(f"Critical error during NLSE query: {e}", exc_info=True)
-            return []
-
     def find_knowledge_gap(self, limit: int = 1) -> List[str]:
         """Finds the least-accessed (lowest significance) atoms in the NLSE."""
         plan = {
@@ -562,7 +518,60 @@ class DatabaseManager:
             "reason": "Validation is now handled by the NLSE on write during 'learn_fact'."
         }
 
+    def query_fact(self, subject: str, relationship: str) -> List[str]:
+        """
+        Queries the NLSE for facts related to a subject.
+        1. Looks up the UUID for the subject name from the in-memory cache.
+        2. Builds a valid ExecutionPlan to traverse from that UUID.
+        3. Executes the plan against the NLSE.
+        4. Processes the results and returns a list of names.
+        """
+        self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
+        
+        # Step 1: Find the UUID for the subject concept.
+        # This is the crucial step to find the starting point of our query.
+        subject_key = f"concept:{subject.lower()}"
+        subject_uuid = self.name_to_uuid_cache.get(subject_key)
 
+        if not subject_uuid:
+            self.logger.warning(f"Query failed: Could not find a UUID for the concept '{subject}'. The AGI may not have learned about it yet.")
+            return []
+
+        self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building plan...")
+
+        # Step 2: Build a valid ExecutionPlan.
+        # This plan tells the NLSE: "First, find this specific atom by its ID.
+        # Then, from that atom, find all atoms connected by this relationship."
+        plan = {
+            "steps": [
+                {"Fetch": {"id": subject_uuid}},
+                {"Traverse": {"relationship_type": relationship.upper(), "depth": 1}}
+            ],
+            "mode": "Standard"
+        }
+
+        # Step 3: Execute the plan.
+        try:
+            result_data = self._execute_nlse_plan(plan, "query fact")
+            
+            # Step 4: Process the results from the NLSE.
+            processed_results = []
+            if result_data and "results" in result_data and result_data["results"]:
+                # The final result is the list of atoms from the last step of the plan.
+                final_atoms = result_data["results"][-1] 
+                
+                for atom in final_atoms:
+                    # Look up the human-readable name from the atom's properties
+                    atom_name = atom.get("properties", {}).get("name", {}).get("String")
+                    if atom_name:
+                        processed_results.append(atom_name)
+            
+            self.logger.info(f"Query for '{subject}' found results: {processed_results}")
+            return processed_results
+
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
+            return []
 # --- SINGLETON INSTANCE ---
 # Create a single, shared instance of the DatabaseManager to be imported by other modules.
 db_manager = DatabaseManager()
