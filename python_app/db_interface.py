@@ -29,18 +29,25 @@ class DatabaseManager:
         NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password123")
 
         # Redis
-        REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+        # FIX: The default host MUST be 'localhost' for the Colab environment.
+        REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
         REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 
         self.neo4j_driver = None
         self.redis_client = None
+        
+        # FIX: Initialize the logger correctly.
         self.logger = logging.getLogger(__name__)
 
-        # Temporary cache for mapping human-readable names to NLSE Uuids.
+        # FIX: Initialize both cache dictionaries.
         self.name_to_uuid_cache: Dict[str, str] = {}
+        self.uuid_to_name_cache: Dict[str, str] = {}
 
         self._connect_to_neo4j(NEO4J_URI, (NEO4J_USER, NEO4J_PASSWORD))
         self._connect_to_redis(REDIS_HOST, REDIS_PORT)
+        
+        # FIX: Add the crucial call to preload the cache from the NLSE's stored data.
+        self.preload_existing_knowledge()
 
     def _connect_to_neo4j(self, uri, auth):
         """Establish a connection to the Neo4j database."""
