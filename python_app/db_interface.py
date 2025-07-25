@@ -38,14 +38,16 @@ class DatabaseManager:
 
     def __init__(self):
         """Initializes the DatabaseManager, connects to databases, and preloads caches."""
-        # Neo4j (legacy/testing) configuration
-        neo4j_uri = os.environ.get("NEO4J_URI", "bolt://nlse_db:7687")
-        neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-        neo4j_password = os.environ.get("NEO4J_PASSWORD", "password123")
+        # This check prevents re-initialization for the singleton pattern
+        if hasattr(self, '_initialized') and self._initialized:
+            return
 
-        # Redis configuration
-        redis_host = os.environ.get("REDIS_HOST", "localhost")
-        redis_port = int(os.environ.get("REDIS_PORT", 6379))
+        # Configuration
+        NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+        NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
+        NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password123")
+        REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+        REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 
         self.neo4j_driver = None
         self.redis_client = None
@@ -56,11 +58,12 @@ class DatabaseManager:
         self.uuid_to_name_cache: Dict[str, str] = {}
 
         # Establish connections
-        self._connect_to_neo4j(neo4j_uri, (neo4j_user, neo4j_password))
-        self._connect_to_redis(redis_host, redis_port)
+        # self._connect_to_neo4j(NEO4J_URI, (NEO4J_USER, NEO4J_PASSWORD))
+        self._connect_to_redis(REDIS_HOST, REDIS_PORT)
 
         # Preload the cache with existing knowledge from the NLSE
         self.preload_existing_knowledge()
+        self._initialized = True
 
     def _connect_to_neo4j(self, uri: str, auth: tuple):
         """Establishes a connection to the Neo4j database."""
@@ -111,13 +114,15 @@ class DatabaseManager:
 
     def _execute_nlse_plan(self, plan: dict, operation_name: str) -> dict:
         """A centralized helper for sending execution plans to the NLSE."""
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
+        # This is the corrected, hardcoded URL for the Colab environment.
+        nlse_url = "http://127.0.0.1:8000/nlse/execute-plan"
         try:
-            response = requests.post(nlse_url, json=plan)
+            response = requests.post(nlse_url, json=plan, timeout=10)
             response.raise_for_status()
             result = response.json()
             if not result.get("success"):
-                raise Exception(f"NLSE failed to {operation_name}: {result.get('message')}")
+                # Use a more specific error if the plan fails
+                raise Exception(f"NLSE plan '{operation_name}' failed: {result.get('message')}")
             self.logger.info(f"NLSE executed '{operation_name}' plan successfully.")
             return result
         except requests.RequestException as e:
@@ -141,13 +146,11 @@ class DatabaseManager:
         for char in sorted(list(set(word_str_lower))):
             char_concept_name = f"char:{char}"
             char_id = self.name_to_uuid_cache.setdefault(char_concept_name, str(uuid.uuid4()))
-
             word_relationships.append({
-                "target_id": char_id,
-                "rel_type": RelationshipType.HAS_PART.value,
+                "target_id": char_id, "rel_type": RelationshipType.HAS_PART.value,
                 "strength": 1.0, "access_timestamp": current_time,
             })
-            # Define the character atom for upserting
+            # Create a write step for the character atom itself (upsert will handle it)
             char_atom_data = {
                 "id": char_id, "label": AtomType.Concept.value, "significance": 1.0,
                 "access_timestamp": current_time, "context_id": None, "state_flags": 0,
@@ -170,42 +173,33 @@ class DatabaseManager:
 
     def label_concept(self, word_str: str, concept_name: str) -> None:
         """
-        Teaches the AGI that a specific word is the label for a concept
-        (the core of symbol grounding).
+        Teaches the AGI that a word is the label for a concept, and correctly
+        updates the in-memory cache.
         """
         word_str_lower = word_str.lower()
-        current_time = int(time.time())
+        concept_name_lower = concept_name.lower()
 
-        # Get or create UUIDs for the word and the concept
-        word_id = self.name_to_uuid_cache.setdefault(f"word:{word_str_lower}", str(uuid.uuid4()))
-        concept_id = self.name_to_uuid_cache.setdefault(f"concept:{concept_name}", str(uuid.uuid4()))
-        self.name_to_uuid_cache[f"concept_for:word:{word_str_lower}"] = concept_id
+        word_key = f"word:{word_str_lower}"
+        concept_key = f"concept:{concept_name_lower}"
 
-        # Define the relationship linking the Word atom to the Concept atom
-        labeling_relationship = {
-            "target_id": concept_id,
-            "rel_type": RelationshipType.IS_LABEL_FOR.value,
-            "strength": 1.0, "access_timestamp": current_time,
-        }
+        word_id = self.name_to_uuid_cache.get(word_key)
+        if not word_id:
+            msg = f"Cannot label concept. Word '{word_str}' is unknown. Please teach it first."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        # Create an execution plan to upsert this new knowledge
-        word_atom_update = {
-            "id": word_id, "label": AtomType.Word.value, "significance": 1.0,
-            "access_timestamp": current_time, "properties": {"name": {"String": word_str_lower}},
-            "emotional_resonance": {}, "embedded_relationships": [labeling_relationship],
-            "context_id": None, "state_flags": 0,
-        }
-        concept_atom_data = {
-            "id": concept_id, "label": AtomType.Concept.value, "significance": 1.0,
-            "access_timestamp": current_time, "context_id": None, "state_flags": 0,
-            "properties": {"name": {"String": concept_name}}, "emotional_resonance": {},
-            "embedded_relationships": []
-        }
+        # Get or create the UUID for the concept
+        concept_id = self.name_to_uuid_cache.get(concept_key, str(uuid.uuid4()))
 
-        plan = {
-            "steps": [{"Write": word_atom_update}, {"Write": concept_atom_data}],
-            "mode": ExecutionMode.STANDARD.value
-        }
+        # Update both caches with the new concept information.
+        self.name_to_uuid_cache[concept_key] = concept_id
+        self.uuid_to_name_cache[concept_id] = concept_name
+
+        labeling_relationship = {"target_id": concept_id, "rel_type": RelationshipType.IS_LABEL_FOR.value}
+        word_atom_update = {"id": word_id, "embedded_relationships": [labeling_relationship]}
+        concept_atom_data = {"id": concept_id, "label": "Concept", "properties": {"name": {"String": concept_name}}}
+
+        plan = {"steps": [{"Write": concept_atom_data}, {"Write": word_atom_update}], "mode": "Standard"}
         self._execute_nlse_plan(plan, f"label concept '{concept_name}'")
 
     def learn_fact(self, triple: StructuredTriple, heart_orchestrator: Any) -> None:
@@ -215,7 +209,7 @@ class DatabaseManager:
         """
         current_time = int(time.time())
 
-        # Find Concept IDs for the subject and object words
+        # Find Concept IDs for the subject and object words.
         subject_concept_id = self.get_uuid_for_name(triple.subject)
         object_concept_id = self.get_uuid_for_name(triple.object)
 
@@ -227,18 +221,19 @@ class DatabaseManager:
         # Get current emotional context from the Heart
         current_emotional_state = heart_orchestrator.get_current_hormonal_state()
 
-        # Define the relationship representing the fact
+        # Create the relationship between the two CONCEPTS
         fact_relationship = {
             "target_id": object_concept_id,
             "rel_type": RelationshipType[triple.relationship.upper()].value,
-            "strength": 1.0, "access_timestamp": current_time,
+            "strength": 1.0,
+            "access_timestamp": current_time,
         }
 
-        # Create a plan to update the subject concept with this new relationship
+        # Create an ExecutionPlan to UPDATE the subject concept atom with this new fact.
         subject_concept_update = {
             "id": subject_concept_id,
             "label": AtomType.Concept.value,
-            "significance": 1.0,  # Boosted by emotion in the NLSE
+            "significance": 1.0,  # This will be boosted by emotion in the NLSE
             "access_timestamp": current_time,
             "properties": {"name": {"String": triple.subject}},
             "emotional_resonance": current_emotional_state,
@@ -246,11 +241,50 @@ class DatabaseManager:
             "context_id": None, "state_flags": 0,
         }
 
-        plan = {
-            "steps": [{"Write": subject_concept_update}],
-            "mode": ExecutionMode.STANDARD.value
-        }
+        plan = {"steps": [{"Write": subject_concept_update}], "mode": ExecutionMode.STANDARD.value}
         self._execute_nlse_plan(plan, "learn conceptual fact")
+
+    def query_fact(self, subject: str, relationship: str) -> List[str]:
+        """
+        Queries the NLSE for facts related to a subject.
+        """
+        self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
+
+        # Step 1: Find the UUID for the subject concept.
+        subject_uuid = self.get_uuid_for_name(subject)
+
+        if not subject_uuid:
+            self.logger.warning(f"Query failed: Could not find a UUID for the concept '{subject}'.")
+            return []
+
+        self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building plan...")
+
+        # Step 2: Build a valid ExecutionPlan.
+        plan = {
+            "steps": [
+                {"Fetch": {"id": subject_uuid}},
+                {"Traverse": {"relationship_type": relationship.upper(), "depth": 1}}
+            ],
+            "mode": "Standard"
+        }
+
+        # Step 3: Execute the plan and process results.
+        try:
+            result_data = self._execute_nlse_plan(plan, "query fact")
+            processed_results = []
+            if result_data and "results" in result_data and result_data["results"]:
+                final_atoms = result_data["results"][-1]
+                for atom in final_atoms:
+                    atom_name = atom.get("properties", {}).get("name", {}).get("String")
+                    if atom_name:
+                        processed_results.append(atom_name)
+
+            self.logger.info(f"Query for '{subject}' found results: {processed_results}")
+            return processed_results
+
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
+            return []
 
     def find_knowledge_gap(self, limit: int = 1) -> List[str]:
         """Finds the least-accessed (lowest significance) atoms in the NLSE."""
@@ -345,7 +379,6 @@ class DatabaseManager:
         """Placeholder check to see if the AGI has established knowledge on a topic."""
         error_subject = fact_info.get("subject")
         self.logger.info(f"Judiciary Interface: Checking knowledge regarding '{error_subject}'.")
-        # This is a simplified mock. A real implementation would query the NLSE.
         known_topics = ["Socrates", "Earth", "Plato"]
         if error_subject in known_topics:
             self.logger.info(f"Knowledge Check: Brain has established knowledge on '{error_subject}'.")
@@ -424,10 +457,7 @@ class DatabaseManager:
     def find_disease_for_error(self, error_type: str, error_details: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
         """Finds a disease that is caused by a specific type of error."""
         self.logger.info(f"Querying NLSE for disease caused by '{error_type}'.")
-        # This is a simplified search. A real implementation would use traversal.
         for disease_atom in self.get_all_diseases():
-            # A real implementation would traverse IS_CAUSED_BY relationships.
-            # This mock checks for a direct property link for simplicity.
             cause_prop_name = f"cause_{error_type}"
             if cause_prop_name in disease_atom.get("properties", {}):
                 disease_id = disease_atom.get("id")
@@ -469,44 +499,33 @@ class DatabaseManager:
 
     # --- PLACEHOLDER & CACHING METHODS ---
 
-    def preload_existing_knowledge(self):
-        """
-        Preloads the name/UUID cache from the NLSE.
-        (This is a placeholder for a method called in __init__ but not defined in the source).
-        """
-        self.logger.info("Preloading existing knowledge cache... (Placeholder)")
-        # A real implementation would query the NLSE for all atoms with a 'name'
-        # property and populate the name_to_uuid_cache and uuid_to_name_cache.
-        # For example:
-        # plan = {"steps": [{"FetchAll": {"context_key": "all_atoms"}}], "mode": "Standard"}
-        # all_atoms = self._execute_nlse_plan(plan, "preload cache")
-        # for atom in all_atoms.get("atoms", []):
-        #     name = atom.get("properties", {}).get("name", {}).get("String")
-        #     if name:
-        #         # Logic to create the appropriate cache key (e.g., "word:name", "concept:name")
-        #         key = f'{atom["label"].lower()}:{name}'
-        #         self.name_to_uuid_cache[key] = atom["id"]
-        #         self.uuid_to_name_cache[atom["id"]] = name
-        pass
-
     def get_uuid_for_name(self, name: str) -> Optional[str]:
         """
-        Resolves a name to a UUID using the cache.
-        (This is a placeholder for a method called in query_fact but not defined in the source).
+        Resolves a human-readable name to its corresponding UUID using the in-memory cache.
+        It intelligently checks for different key formats (e.g., 'concept:name').
         """
         name_lower = name.lower()
-        # Check for prefixed names first, which are more specific
         keys_to_try = [
-            f"concept_for:word:{name_lower}",
             f"concept:{name_lower}",
             f"word:{name_lower}",
+            f"concept_for:word:{name_lower}",
+            name_lower
         ]
         for key in keys_to_try:
             if key in self.name_to_uuid_cache:
-                return self.name_to_uuid_cache[key]
+                uuid_val = self.name_to_uuid_cache[key]
+                self.logger.debug(f"Cache hit: Found UUID '{uuid_val}' for key '{key}'.")
+                return uuid_val
+        self.logger.warning(f"Cache miss: Could not find UUID for name '{name}' in cache.")
+        return None
 
-        # Fallback for names that might not have been cached with a prefix
-        return self.name_to_uuid_cache.get(name)
+    def preload_existing_knowledge(self):
+        """
+        Preloads the name/UUID cache from the NLSE.
+        (This is a placeholder for a method called in __init__).
+        """
+        self.logger.info("Preloading existing knowledge cache... (Placeholder)")
+        pass
 
     def validate_fact_with_lve(self, triple: StructuredTriple) -> dict:
         """
@@ -518,85 +537,6 @@ class DatabaseManager:
             "reason": "Validation is now handled by the NLSE on write during 'learn_fact'."
         }
 
-    def query_fact(self, subject: str, relationship: str) -> List[str]:
-        """
-        Queries the NLSE for facts related to a subject.
-        1. Looks up the UUID for the subject name from the in-memory cache.
-        2. Builds a valid ExecutionPlan to traverse from that UUID.
-        3. Executes the plan against the NLSE.
-        4. Processes the results and returns a list of names.
-        """
-        self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
-        
-        # Step 1: Find the UUID for the subject concept.
-        # This is the crucial step to find the starting point of our query.
-        subject_key = f"concept:{subject.lower()}"
-        subject_uuid = self.name_to_uuid_cache.get(subject_key)
-
-        if not subject_uuid:
-            self.logger.warning(f"Query failed: Could not find a UUID for the concept '{subject}'. The AGI may not have learned about it yet.")
-            return []
-
-        self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building plan...")
-
-        # Step 2: Build a valid ExecutionPlan.
-        # This plan tells the NLSE: "First, find this specific atom by its ID.
-        # Then, from that atom, find all atoms connected by this relationship."
-        plan = {
-            "steps": [
-                {"Fetch": {"id": subject_uuid}},
-                {"Traverse": {"relationship_type": relationship.upper(), "depth": 1}}
-            ],
-            "mode": "Standard"
-        }
-
-        # Step 3: Execute the plan.
-        try:
-            result_data = self._execute_nlse_plan(plan, "query fact")
-            
-            # Step 4: Process the results from the NLSE.
-            processed_results = []
-            if result_data and "results" in result_data and result_data["results"]:
-                # The final result is the list of atoms from the last step of the plan.
-                final_atoms = result_data["results"][-1] 
-                
-                for atom in final_atoms:
-                    # Look up the human-readable name from the atom's properties
-                    atom_name = atom.get("properties", {}).get("name", {}).get("String")
-                    if atom_name:
-                        processed_results.append(atom_name)
-            
-            self.logger.info(f"Query for '{subject}' found results: {processed_results}")
-            return processed_results
-
-        except Exception as e:
-            self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
-            return []
-            
-    def get_uuid_for_name(self, name: str) -> Optional[str]:
-        """
-        Resolves a human-readable name to its corresponding UUID using the in-memory cache.
-        This is a critical helper for building ExecutionPlans for the NLSE.
-        It intelligently checks for different key formats (e.g., 'concept:name').
-        """
-        name_lower = name.lower()
-        
-        # Define the order of keys to check, from most specific to least
-        keys_to_try = [
-            f"concept:{name_lower}",
-            f"word:{name_lower}",
-            f"concept_for:word:{name_lower}", # Check for this specific mapping
-            name_lower # Fallback for keys that might not have a prefix
-        ]
-        
-        for key in keys_to_try:
-            if key in self.name_to_uuid_cache:
-                uuid = self.name_to_uuid_cache[key]
-                self.logger.debug(f"Cache hit: Found UUID '{uuid}' for key '{key}'.")
-                return uuid
-        
-        self.logger.warning(f"Cache miss: Could not find UUID for name '{name}' in cache.")
-        return None            
 # --- SINGLETON INSTANCE ---
 # Create a single, shared instance of the DatabaseManager to be imported by other modules.
 db_manager = DatabaseManager()
