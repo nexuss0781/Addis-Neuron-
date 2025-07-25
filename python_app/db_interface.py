@@ -1,71 +1,84 @@
+# --- IMPORTS ---
+
+# Standard library imports
+import json
 import logging
 import os
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+# Third-party imports
+import numpy as np
 import redis
+import requests
 from neo4j import GraphDatabase
 from neo4j.exceptions import ServiceUnavailable
-import logging
-import json
-import requests
-from typing import Optional, List, Tuple, Dict, Any # <-- THIS LINE IS THE FIX
-import numpy as np
-import uuid
-import time
 
-from models import StructuredTriple, DiseaseDefinition, ExecutionMode, AtomType, RelationshipType
+# Local application imports
+from models import (AtomType, DiseaseDefinition, ExecutionMode, RelationshipType,
+                    StructuredTriple)
 
 
+# --- SETUP ---
+
+# Initialize the logger for this module
 logger = logging.getLogger(__name__)
 
 
+# --- DATABASE MANAGER CLASS ---
+
 class DatabaseManager:
     """
-    Manages connections and interactions with NLSE (via logical_engine),
+    Manages connections and interactions with the NLSE (via logical_engine),
     Redis, and provides a legacy interface for Neo4j.
     """
-    def __init__(self):
-        # Neo4j (legacy/testing)
-        NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://nlse_db:7687")
-        NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-        NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password123")
 
-        # Redis
-        # FIX: The default host MUST be 'localhost' for the Colab environment.
-        REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-        REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+    # --- INITIALIZATION AND CONNECTION MANAGEMENT ---
+
+    def __init__(self):
+        """Initializes the DatabaseManager, connects to databases, and preloads caches."""
+        # Neo4j (legacy/testing) configuration
+        neo4j_uri = os.environ.get("NEO4J_URI", "bolt://nlse_db:7687")
+        neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
+        neo4j_password = os.environ.get("NEO4J_PASSWORD", "password123")
+
+        # Redis configuration
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", 6379))
 
         self.neo4j_driver = None
         self.redis_client = None
-        
-        # FIX: Initialize the logger correctly.
         self.logger = logging.getLogger(__name__)
 
-        # FIX: Initialize both cache dictionaries.
+        # Caches for mapping human-readable names to internal UUIDs
         self.name_to_uuid_cache: Dict[str, str] = {}
         self.uuid_to_name_cache: Dict[str, str] = {}
 
-        self._connect_to_neo4j(NEO4J_URI, (NEO4J_USER, NEO4J_PASSWORD))
-        self._connect_to_redis(REDIS_HOST, REDIS_PORT)
-        
-        # FIX: Add the crucial call to preload the cache from the NLSE's stored data.
+        # Establish connections
+        self._connect_to_neo4j(neo4j_uri, (neo4j_user, neo4j_password))
+        self._connect_to_redis(redis_host, redis_port)
+
+        # Preload the cache with existing knowledge from the NLSE
         self.preload_existing_knowledge()
 
-    def _connect_to_neo4j(self, uri, auth):
-        """Establish a connection to the Neo4j database."""
+    def _connect_to_neo4j(self, uri: str, auth: tuple):
+        """Establishes a connection to the Neo4j database."""
         try:
             self.neo4j_driver = GraphDatabase.driver(uri, auth=auth)
-            logger.info("Successfully connected to Neo4j.")
+            self.logger.info("Successfully connected to Neo4j.")
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
+            self.logger.error(f"Failed to connect to Neo4j: {e}")
             self.neo4j_driver = None
 
-    def _connect_to_redis(self, host, port):
-        """Establish a connection to the Redis server."""
+    def _connect_to_redis(self, host: str, port: int):
+        """Establishes a connection to the Redis server."""
         try:
             self.redis_client = redis.Redis(host=host, port=port, db=0, decode_responses=True)
             self.redis_client.ping()
-            logger.info("Successfully connected to Redis.")
+            self.logger.info("Successfully connected to Redis.")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            self.logger.error(f"Failed to connect to Redis: {e}")
             self.redis_client = None
 
     def ping_databases(self) -> Dict[str, str]:
@@ -76,26 +89,28 @@ class DatabaseManager:
                 self.neo4j_driver.verify_connectivity()
                 status["neo4j"] = "connected"
             except (ServiceUnavailable, Exception) as e:
-                logger.warning(f"Neo4j ping failed: {e}")
+                self.logger.warning(f"Neo4j ping failed: {e}")
         if self.redis_client:
             try:
                 if self.redis_client.ping():
                     status["redis"] = "connected"
             except Exception as e:
-                logger.warning(f"Redis ping failed: {e}")
+                self.logger.warning(f"Redis ping failed: {e}")
         return status
 
     def close(self):
-        """Closes database connections."""
+        """Closes all active database connections."""
         if self.neo4j_driver:
             self.neo4j_driver.close()
+            self.logger.info("Neo4j connection closed.")
         if self.redis_client:
             self.redis_client.close()
+            self.logger.info("Redis connection closed.")
 
-    # --- NLSE INTEGRATED METHODS ---
+    # --- INTERNAL NLSE HELPER ---
 
     def _execute_nlse_plan(self, plan: dict, operation_name: str) -> dict:
-        """A centralized helper for sending plans to the NLSE."""
+        """A centralized helper for sending execution plans to the NLSE."""
         nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://127.0.0.1:8000") + "/nlse/execute-plan"
         try:
             response = requests.post(nlse_url, json=plan)
@@ -103,57 +118,129 @@ class DatabaseManager:
             result = response.json()
             if not result.get("success"):
                 raise Exception(f"NLSE failed to {operation_name}: {result.get('message')}")
-            logger.info(f"NLSE executed '{operation_name}' plan: {result.get('message')}")
+            self.logger.info(f"NLSE executed '{operation_name}' plan successfully.")
             return result
         except requests.RequestException as e:
-            logger.error(f"Could not execute '{operation_name}' plan on NLSE: {e}")
+            self.logger.error(f"Could not execute '{operation_name}' plan on NLSE: {e}")
             raise ServiceUnavailable("NLSE service is unavailable.") from e
 
-    def learn_fact(self, triple: StructuredTriple, heart_orchestrator) -> None:
-        """
-        REFACTORED for Conceptual Learning.
-        Translates a fact about words into a fact about concepts.
-        """
-        from models import AtomType, RelationshipType, ExecutionMode
-        import time
+    # --- CORE KNOWLEDGE & LEARNING (NLSE) ---
 
+    def learn_word(self, word_str: str) -> None:
+        """
+        Teaches the AGI a new word by breaking it down into its constituent
+        characters and storing the structure in the NLSE.
+        """
+        plan_steps = []
+        current_time = int(time.time())
+        word_str_lower = word_str.lower()
+        word_id = self.name_to_uuid_cache.setdefault(f"word:{word_str_lower}", str(uuid.uuid4()))
+        word_relationships = []
+
+        # Create atoms for each unique character and link them to the word
+        for char in sorted(list(set(word_str_lower))):
+            char_concept_name = f"char:{char}"
+            char_id = self.name_to_uuid_cache.setdefault(char_concept_name, str(uuid.uuid4()))
+
+            word_relationships.append({
+                "target_id": char_id,
+                "rel_type": RelationshipType.HAS_PART.value,
+                "strength": 1.0, "access_timestamp": current_time,
+            })
+            # Define the character atom for upserting
+            char_atom_data = {
+                "id": char_id, "label": AtomType.Concept.value, "significance": 1.0,
+                "access_timestamp": current_time, "context_id": None, "state_flags": 0,
+                "properties": {"name": {"String": char}}, "emotional_resonance": {},
+                "embedded_relationships": []
+            }
+            plan_steps.append({"Write": char_atom_data})
+
+        # Assemble the main Word atom with its relationships
+        word_atom_data = {
+            "id": word_id, "label": AtomType.Word.value, "significance": 1.0,
+            "access_timestamp": current_time, "context_id": None, "state_flags": 0,
+            "properties": {"name": {"String": word_str_lower}}, "emotional_resonance": {},
+            "embedded_relationships": word_relationships
+        }
+        plan_steps.append({"Write": word_atom_data})
+
+        plan = {"steps": plan_steps, "mode": ExecutionMode.STANDARD.value}
+        self._execute_nlse_plan(plan, f"learn word '{word_str}'")
+
+    def label_concept(self, word_str: str, concept_name: str) -> None:
+        """
+        Teaches the AGI that a specific word is the label for a concept
+        (the core of symbol grounding).
+        """
+        word_str_lower = word_str.lower()
         current_time = int(time.time())
 
-        # 1. Find the Concept IDs for the subject and object words.
-        # This is a simplification. A real implementation would send a plan to the NLSE
-        # to do this lookup. For now, we use our local name->uuid cache.
-        subject_word_key = f"word:{triple.subject.lower()}"
-        object_word_key = f"word:{triple.object.lower()}"
+        # Get or create UUIDs for the word and the concept
+        word_id = self.name_to_uuid_cache.setdefault(f"word:{word_str_lower}", str(uuid.uuid4()))
+        concept_id = self.name_to_uuid_cache.setdefault(f"concept:{concept_name}", str(uuid.uuid4()))
+        self.name_to_uuid_cache[f"concept_for:word:{word_str_lower}"] = concept_id
 
-        # In a real system we would query for the atom, get its relationships, and find the concept
-        # For now, we assume a direct mapping in our cache for simplicity.
-        subject_concept_id = self.name_to_uuid_cache.get(f"concept_for:{subject_word_key}")
-        object_concept_id = self.name_to_uuid_cache.get(f"concept_for:{object_word_key}")
+        # Define the relationship linking the Word atom to the Concept atom
+        labeling_relationship = {
+            "target_id": concept_id,
+            "rel_type": RelationshipType.IS_LABEL_FOR.value,
+            "strength": 1.0, "access_timestamp": current_time,
+        }
+
+        # Create an execution plan to upsert this new knowledge
+        word_atom_update = {
+            "id": word_id, "label": AtomType.Word.value, "significance": 1.0,
+            "access_timestamp": current_time, "properties": {"name": {"String": word_str_lower}},
+            "emotional_resonance": {}, "embedded_relationships": [labeling_relationship],
+            "context_id": None, "state_flags": 0,
+        }
+        concept_atom_data = {
+            "id": concept_id, "label": AtomType.Concept.value, "significance": 1.0,
+            "access_timestamp": current_time, "context_id": None, "state_flags": 0,
+            "properties": {"name": {"String": concept_name}}, "emotional_resonance": {},
+            "embedded_relationships": []
+        }
+
+        plan = {
+            "steps": [{"Write": word_atom_update}, {"Write": concept_atom_data}],
+            "mode": ExecutionMode.STANDARD.value
+        }
+        self._execute_nlse_plan(plan, f"label concept '{concept_name}'")
+
+    def learn_fact(self, triple: StructuredTriple, heart_orchestrator: Any) -> None:
+        """
+        Learns a conceptual fact by creating a relationship between two known concepts,
+        influenced by the current emotional state.
+        """
+        current_time = int(time.time())
+
+        # Find Concept IDs for the subject and object words
+        subject_concept_id = self.get_uuid_for_name(triple.subject)
+        object_concept_id = self.get_uuid_for_name(triple.object)
 
         if not subject_concept_id or not object_concept_id:
             msg = f"Cannot learn fact. Concept for '{triple.subject}' or '{triple.object}' is unknown. Please label them first."
-            logger.error(msg)
-            raise ValueError(msg)  # Raise an error to be caught by the API
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        # 2. Get current emotional context from the Heart
-        
+        # Get current emotional context from the Heart
         current_emotional_state = heart_orchestrator.get_current_hormonal_state()
 
-        # 3. Create the relationship between the two CONCEPTS
+        # Define the relationship representing the fact
         fact_relationship = {
             "target_id": object_concept_id,
             "rel_type": RelationshipType[triple.relationship.upper()].value,
-            "strength": 1.0,
-            "access_timestamp": current_time,
+            "strength": 1.0, "access_timestamp": current_time,
         }
 
-        # 4. Create an ExecutionPlan to UPDATE the subject concept atom with this new fact.
+        # Create a plan to update the subject concept with this new relationship
         subject_concept_update = {
             "id": subject_concept_id,
             "label": AtomType.Concept.value,
-            "significance": 1.0,  # This will be boosted by emotion in the NLSE
+            "significance": 1.0,  # Boosted by emotion in the NLSE
             "access_timestamp": current_time,
-            "properties": {"name": {"String": triple.subject}},  # Keep name for debugging
+            "properties": {"name": {"String": triple.subject}},
             "emotional_resonance": current_emotional_state,
             "embedded_relationships": [fact_relationship],
             "context_id": None, "state_flags": 0,
@@ -163,214 +250,125 @@ class DatabaseManager:
             "steps": [{"Write": subject_concept_update}],
             "mode": ExecutionMode.STANDARD.value
         }
+        self._execute_nlse_plan(plan, "learn conceptual fact")
 
-        # 5. Send the plan to the NLSE
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://logical_engine:8000") + "/nlse/execute-plan"
-        try:
-            response = requests.post(nlse_url, json=plan)
-            response.raise_for_status()
-            result = response.json()
-            if not result.get("success"):
-                raise Exception(f"NLSE failed to learn fact: {result.get('message')}")
+    def query_fact(self, subject: str, relationship: str) -> List[str]:
+        """Queries the NLSE for facts by traversing from a subject concept."""
+        self.logger.debug(f"Querying for '{subject}' -{relationship}-> ?")
 
-            logger.info(f"Successfully sent conceptual fact ExecutionPlan to NLSE.")
-        except requests.RequestException as e:
-            logger.error(f"Could not send conceptual fact plan to NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e
+        subject_uuid = self.get_uuid_for_name(subject)
+        if not subject_uuid:
+            self.logger.warning(f"Query failed: Concept for word '{subject}' is unknown.")
+            return []
 
-    def label_concept(self, word_str: str, concept_name: str) -> None:
-        """
-        Teaches the AGI that a specific word is the label for a specific concept.
-        This is the core of symbol grounding.
-        """
-        from models import AtomType, RelationshipType, ExecutionMode
-        import time
-
-        word_str_lower = word_str.lower()
-
-        # 1. Get or create the UUIDs for the word and the concept
-        word_id = self.name_to_uuid_cache.setdefault(f"word:{word_str_lower}", str(uuid.uuid4()))
-        concept_id = self.name_to_uuid_cache.setdefault(f"concept:{concept_name}", str(uuid.uuid4()))
-        self.name_to_uuid_cache[f"concept_for:word:{word_str_lower}"] = concept_id
-        current_time = int(time.time())
-
-        # 2. Create the relationship that links the word to the concept
-        labeling_relationship = {
-            "target_id": concept_id,
-            "rel_type": RelationshipType.IS_LABEL_FOR.value,
-            "strength": 1.0,
-            "access_timestamp": current_time,
-        }
-
-        # 3. We need to create an ExecutionPlan that UPSERTS this new knowledge.
-        # It finds the existing Word atom and adds the new relationship to it.
-        word_atom_update = {
-            "id": word_id,
-            "label": AtomType.Word.value,  # Ensure the label is correct
-            "significance": 1.0,  # We can reset or boost significance here
-            "access_timestamp": current_time,
-            "properties": {"name": {"String": word_str_lower}},
-            "emotional_resonance": {},  # No emotion associated with the act of labeling itself
-            "embedded_relationships": [labeling_relationship],
-            # All other fields can be omitted for an update
-            "context_id": None, "state_flags": 0,
-        }
-
-        # Also ensure the concept atom exists
-        concept_atom_data = {
-            "id": concept_id, "label": AtomType.Concept.value, "significance": 1.0,
-            "access_timestamp": current_time, "context_id": None, "state_flags": 0,
-            "properties": {"name": {"String": concept_name}}, "emotional_resonance": {},
-            "embedded_relationships": []
-        }
-
+        # Build a two-step plan: 1. Fetch the starting atom, 2. Traverse from it.
         plan = {
             "steps": [
-                {"Write": word_atom_update},
-                {"Write": concept_atom_data}
+                {"Fetch": {"id": subject_uuid, "context_key": "start_node"}},
+                {
+                    "Traverse": {
+                        "from_context_key": "start_node",
+                        "rel_type": relationship.upper(),
+                        "output_key": "final",
+                    }
+                }
             ],
             "mode": ExecutionMode.STANDARD.value
         }
+        self.logger.debug(f"Constructed ExecutionPlan:\n{json.dumps(plan, indent=2)}")
 
-        # 4. Send the plan to the NLSE
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://logical_engine:8000") + "/nlse/execute-plan"
         try:
-            response = requests.post(nlse_url, json=plan)
-            response.raise_for_status()
-            result = response.json()
-            if not result.get("success"):
-                raise Exception(f"NLSE failed to label concept '{concept_name}': {result.get('message')}")
+            result = self._execute_nlse_plan(plan, "query fact")
+            if result and result.get("success"):
+                # Extract the 'name' property from each resulting atom
+                names = [
+                    atom.get("properties", {}).get("name", {}).get("String")
+                    for atom in result.get("atoms", [])
+                    if atom.get("properties", {}).get("name", {}).get("String")
+                ]
+                self.logger.debug(f"Query successful. Results: {names}")
+                return names
+            else:
+                error_message = result.get('message', 'Unknown error')
+                self.logger.error(f"NLSE query execution failed: {error_message}")
+                return []
+        except Exception as e:
+            self.logger.error(f"Critical error during NLSE query: {e}", exc_info=True)
+            return []
 
-            logger.info(f"Successfully sent ExecutionPlan to label concept '{concept_name}' with word '{word_str}'.")
-        except requests.RequestException as e:
-            logger.error(f"Could not send 'label_concept' plan to NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e
-
-    def learn_word(self, word_str: str) -> None:
-        """
-        Teaches the AGI a new word by breaking it down into its constituent
-        characters and storing the structure in the NLSE.
-        """
-        from models import AtomType, RelationshipType, ExecutionMode
-        import time
-
-        plan_steps = []
-        current_time = int(time.time())
-        word_str_lower = word_str.lower()
-
-        # 1. Define the main Word atom
-        word_id = self.name_to_uuid_cache.setdefault(f"word:{word_str_lower}", str(uuid.uuid4()))
-        word_relationships = []
-
-        # 2. Create atoms for each unique character and link them to the word
-        unique_chars = sorted(list(set(word_str_lower)))
-
-        for char in unique_chars:
-            char_concept_name = f"char:{char}"
-            char_id = self.name_to_uuid_cache.setdefault(char_concept_name, str(uuid.uuid4()))
-
-            # Add a relationship from the Word to this Character concept
-            word_relationships.append({
-                "target_id": char_id,
-                "rel_type": RelationshipType.HAS_PART.value,  # A word 'HAS_PART' characters
-                "strength": 1.0,
-                "access_timestamp": current_time,
-            })
-
-            # Create a write step for the character atom itself (upsert will handle it)
-            char_atom_data = {
-                "id": char_id, "label": AtomType.Concept.value, "significance": 1.0,
-                "access_timestamp": current_time, "context_id": None, "state_flags": 0,
-                "properties": {"name": {"String": char}}, "emotional_resonance": {},
-                "embedded_relationships": []
-            }
-            plan_steps.append({"Write": char_atom_data})
-
-        # 3. Assemble the main Word atom with its relationships
-        word_atom_data = {
-            "id": word_id, "label": AtomType.Word.value, "significance": 1.0,
-            "access_timestamp": current_time, "context_id": None, "state_flags": 0,
-            "properties": {"name": {"String": word_str_lower}}, "emotional_resonance": {},
-            "embedded_relationships": word_relationships
-        }
-        plan_steps.append({"Write": word_atom_data})
-
-        # 4. Build and execute the full plan
-        plan = {"steps": plan_steps, "mode": ExecutionMode.STANDARD.value}
-
-        nlse_url = os.environ.get("LOGICAL_ENGINE_URL", "http://logical_engine:8000") + "/nlse/execute-plan"
-        try:
-            response = requests.post(nlse_url, json=plan)
-            response.raise_for_status()
-            result = response.json()
-            if not result.get("success"):
-                raise Exception(f"NLSE failed to learn word '{word_str}': {result.get('message')}")
-
-            logger.info(f"Successfully sent ExecutionPlan to learn word '{word_str}'.")
-        except requests.RequestException as e:
-            logger.error(f"Could not send 'learn_word' plan to NLSE: {e}")
-            raise ServiceUnavailable("NLSE service is unavailable.") from e
-            
     def find_knowledge_gap(self, limit: int = 1) -> List[str]:
+        """Finds the least-accessed (lowest significance) atoms in the NLSE."""
         plan = {
             "steps": [{"FetchBySignificance": {"limit": limit, "context_key": "final"}}],
-            "mode": "Standard"
+            "mode": ExecutionMode.STANDARD.value
         }
         result = self._execute_nlse_plan(plan, "find knowledge gap")
-        return [atom.get("properties", {}).get("name", {}).get("String", "Unknown") for atom in result.get("atoms", [])]
+        return [
+            atom.get("properties", {}).get("name", {}).get("String", "Unknown")
+            for atom in result.get("atoms", [])
+        ]
 
-    # --- HEART METHODS ---
+    # --- HEART & EMOTION INTERFACE (Redis) ---
+
     def log_illusion(self, illusion_data: dict) -> None:
+        """Logs an illusion event to a Redis list."""
         if not self.redis_client:
-            logger.warning("Redis not available, cannot log illusion.")
+            self.logger.warning("Redis not available, cannot log illusion.")
             return
         try:
             illusion_json = json.dumps(illusion_data)
             self.redis_client.lpush("illusion_log", illusion_json)
-            logger.info(f"Successfully logged new illusion to Redis.")
+            self.logger.info("Successfully logged new illusion to Redis.")
         except (redis.exceptions.RedisError, TypeError) as e:
-            logger.error(f"Failed to log illusion to Redis: {e}")
+            self.logger.error(f"Failed to log illusion to Redis: {e}")
 
     def get_all_prototypes(self) -> List[Dict]:
+        """Retrieves all emotion prototypes from Redis."""
         if not self.redis_client:
             return []
-        prototype_keys = self.redis_client.scan_iter("prototype:*")
-        prototypes = []
-        for key in prototype_keys:
-            try:
+        try:
+            prototype_keys = self.redis_client.scan_iter("prototype:*")
+            prototypes = []
+            for key in prototype_keys:
                 proto_json = self.redis_client.get(key)
                 if proto_json:
                     prototypes.append(json.loads(proto_json))
-            except redis.exceptions.RedisError as e:
-                logger.error(f"Failed to retrieve prototype for key {key}: {e}")
-        return prototypes
+            return prototypes
+        except redis.exceptions.RedisError as e:
+            self.logger.error(f"Failed to retrieve prototypes from Redis: {e}")
+            return []
 
     def update_prototype_with_label(self, prototype_id: str, name: str, description: str) -> bool:
+        """Updates an emotion prototype in Redis with a human-readable label."""
         if not self.redis_client:
             return False
         redis_key = f"prototype:{prototype_id}"
         try:
             proto_json = self.redis_client.get(redis_key)
             if not proto_json:
-                logger.warning(f"Attempted to label a non-existent prototype: {prototype_id}")
+                self.logger.warning(f"Attempted to label a non-existent prototype: {prototype_id}")
                 return False
+
             prototype = json.loads(proto_json)
             prototype['name'] = name
             prototype['description'] = description
             self.redis_client.set(redis_key, json.dumps(prototype))
-            logger.info(f"Successfully labeled prototype {prototype_id} as '{name}'.")
+            self.logger.info(f"Successfully labeled prototype {prototype_id} as '{name}'.")
             return True
         except (redis.exceptions.RedisError, TypeError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to label prototype {prototype_id}: {e}")
+            self.logger.error(f"Failed to label prototype {prototype_id}: {e}")
             return False
 
     def get_named_emotion_by_signature(self, physio_state: Dict[str, float]) -> Optional[Dict[str, Any]]:
+        """Finds the best-matching named emotion for a given physiological state."""
         all_prototypes = self.get_all_prototypes()
         named_emotions = [p for p in all_prototypes if p.get("name")]
         if not named_emotions:
             return None
+
         feature_keys = sorted(physio_state.keys())
         current_vector = np.array([physio_state.get(k, 0.0) for k in feature_keys])
+
         best_match, smallest_distance = None, float('inf')
         for emotion in named_emotions:
             avg_sig = emotion.get("average_signature", {})
@@ -378,74 +376,39 @@ class DatabaseManager:
             distance = np.linalg.norm(current_vector - emotion_vector)
             if distance < smallest_distance:
                 smallest_distance, best_match = distance, emotion
+
         MATCH_THRESHOLD = 0.5
         if best_match and smallest_distance < MATCH_THRESHOLD:
-            logger.info(f"Matched current feeling to '{best_match['name']}' with distance {smallest_distance:.2f}")
+            self.logger.info(f"Matched current feeling to '{best_match['name']}' with distance {smallest_distance:.2f}")
             return best_match
         return None
 
-    # --- JUDICIARY & HEALTH ENHANCEMENT INTERFACE ---
+    # --- JUDICIARY & HEALTH INTERFACE (NLSE) ---
+
     def does_brain_know_truth_of(self, fact_info: Dict[str, Any]) -> bool:
+        """Placeholder check to see if the AGI has established knowledge on a topic."""
         error_subject = fact_info.get("subject")
-        logger.info(f"Judiciary Interface: Checking brain's knowledge regarding '{error_subject}'.")
+        self.logger.info(f"Judiciary Interface: Checking knowledge regarding '{error_subject}'.")
+        # This is a simplified mock. A real implementation would query the NLSE.
         known_topics = ["Socrates", "Earth", "Plato"]
         if error_subject in known_topics:
-            logger.info(f"Knowledge Check: Brain has established knowledge on '{error_subject}'.")
+            self.logger.info(f"Knowledge Check: Brain has established knowledge on '{error_subject}'.")
             return True
-        else:
-            logger.info(f"Knowledge Check: Brain has no established knowledge on '{error_subject}'.")
-            return False
-
-    def find_disease_for_error(self, error_type: str, error_details: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-        logger.info(f"Querying NLSE for disease caused by '{error_type}'.")
-        all_diseases_data = self.get_all_diseases()
-        for disease_atom in all_diseases_data:
-            # This logic is simplified; a real implementation would traverse IS_CAUSED_BY relationships
-            # For now, we assume a property like 'cause_LogicalError' exists.
-            cause_prop_name = f"cause_{error_type}"
-            if cause_prop_name in disease_atom.get("properties", {}):
-                disease_id = disease_atom.get("id")
-                disease_name = disease_atom.get("properties", {}).get("name", {}).get("String")
-                logger.info(f"Found matching disease: '{disease_name}' (ID: {disease_id})")
-                return disease_id, disease_name
-        logger.info(f"No specific disease protocol found for error type '{error_type}' in NLSE.")
-        return None, None
-
-    def get_all_diseases(self) -> list[dict]:
-        plan = {
-            "steps": [{"FetchByType": {"atom_type": "DiseaseProtocol", "context_key": "final"}}],
-            "mode": "Standard"
-        }
-        result = self._execute_nlse_plan(plan, "get all diseases")
-        return result.get("atoms", [])
-
-    def get_symptoms_for_disease(self, disease_id: str) -> list[dict]:
-        plan = {
-            "steps": [
-                {"Fetch": {"id": disease_id, "context_key": "disease"}},
-                {"Traverse": {
-                    "from_context_key": "disease",
-                    "rel_type": "HAS_SYMPTOM",
-                    "output_key": "final"
-                }}
-            ],
-            "mode": "Standard"
-        }
-        result = self._execute_nlse_plan(plan, f"get symptoms for disease {disease_id}")
-        return [s.get("properties", {}) for s in result.get("atoms", [])]
+        self.logger.info(f"Knowledge Check: Brain has no established knowledge on '{error_subject}'.")
+        return False
 
     def define_new_disease(self, definition: DiseaseDefinition) -> bool:
+        """Defines a new disease protocol in the NLSE, including symptoms, causes, and treatments."""
         plan_steps = []
         current_time = int(time.time())
         disease_id = str(uuid.uuid4())
         disease_relationships = []
         disease_properties = {
-            "name": {"String": definition.name},
-            "description": {"String": definition.description},
-            "severity": {"Float": definition.severity},
-            "stages": {"Int": definition.stages},
+            "name": {"String": definition.name}, "description": {"String": definition.description},
+            "severity": {"Float": definition.severity}, "stages": {"Int": definition.stages},
         }
 
+        # Create Symptom atoms and link them
         for symptom in definition.symptoms:
             symptom_id = str(uuid.uuid4())
             symptom_properties = {
@@ -459,25 +422,27 @@ class DatabaseManager:
                 "emotional_resonance": {}, "embedded_relationships": [], "context_id": None, "state_flags": 0,
             }})
             disease_relationships.append({
-                "target_id": symptom_id, "rel_type": RelationshipType.HAS_SYMPTOM.value, "strength": 1.0, "access_timestamp": current_time,
-            })
-
-        for cause in definition.causes:
-            # This creates a placeholder atom for the error type if it doesn't exist.
-            # A more robust system would link to pre-defined error type concepts.
-            cause_id = self.name_to_uuid_cache.setdefault(f"error_type:{cause.error_type}", str(uuid.uuid4()))
-            disease_relationships.append({
-                "target_id": cause_id,
-                "rel_type": RelationshipType.IS_CAUSED_BY.value,
+                "target_id": symptom_id, "rel_type": RelationshipType.HAS_SYMPTOM.value,
                 "strength": 1.0, "access_timestamp": current_time,
             })
 
+        # Link to Cause atoms (error types)
+        for cause in definition.causes:
+            cause_id = self.name_to_uuid_cache.setdefault(f"error_type:{cause.error_type}", str(uuid.uuid4()))
+            disease_relationships.append({
+                "target_id": cause_id, "rel_type": RelationshipType.IS_CAUSED_BY.value,
+                "strength": 1.0, "access_timestamp": current_time,
+            })
+
+        # Link to Treatment atoms (medications)
         for treatment in definition.treatments:
             med_id = self.name_to_uuid_cache.setdefault(f"medication:{treatment.medication_name}", str(uuid.uuid4()))
             disease_relationships.append({
-                "target_id": med_id, "rel_type": RelationshipType.IS_CURED_BY.value, "strength": 1.0, "access_timestamp": current_time,
+                "target_id": med_id, "rel_type": RelationshipType.IS_CURED_BY.value,
+                "strength": 1.0, "access_timestamp": current_time,
             })
 
+        # Create the main DiseaseProtocol atom
         disease_atom_data = {
             "id": disease_id, "label": AtomType.DiseaseProtocol.value, "significance": 5.0,
             "access_timestamp": current_time, "properties": disease_properties,
@@ -487,88 +452,117 @@ class DatabaseManager:
         plan_steps.append({"Write": disease_atom_data})
 
         plan = {"steps": plan_steps, "mode": ExecutionMode.STANDARD.value}
-
         self._execute_nlse_plan(plan, f"define disease '{definition.name}'")
         self.name_to_uuid_cache[definition.name] = disease_id
         return True
 
+    def get_all_diseases(self) -> list[dict]:
+        """Retrieves all defined DiseaseProtocol atoms from the NLSE."""
+        plan = {
+            "steps": [{"FetchByType": {"atom_type": "DiseaseProtocol", "context_key": "final"}}],
+            "mode": ExecutionMode.STANDARD.value
+        }
+        result = self._execute_nlse_plan(plan, "get all diseases")
+        return result.get("atoms", [])
+
+    def find_disease_for_error(self, error_type: str, error_details: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """Finds a disease that is caused by a specific type of error."""
+        self.logger.info(f"Querying NLSE for disease caused by '{error_type}'.")
+        # This is a simplified search. A real implementation would use traversal.
+        for disease_atom in self.get_all_diseases():
+            # A real implementation would traverse IS_CAUSED_BY relationships.
+            # This mock checks for a direct property link for simplicity.
+            cause_prop_name = f"cause_{error_type}"
+            if cause_prop_name in disease_atom.get("properties", {}):
+                disease_id = disease_atom.get("id")
+                disease_name = disease_atom.get("properties", {}).get("name", {}).get("String")
+                self.logger.info(f"Found matching disease: '{disease_name}' (ID: {disease_id})")
+                return disease_id, disease_name
+        self.logger.info(f"No specific disease protocol found for error type '{error_type}'.")
+        return None, None
+
+    def get_symptoms_for_disease(self, disease_id: str) -> list[dict]:
+        """Retrieves all symptom atoms connected to a specific disease."""
+        plan = {
+            "steps": [
+                {"Fetch": {"id": disease_id, "context_key": "disease"}},
+                {"Traverse": {
+                    "from_context_key": "disease",
+                    "rel_type": "HAS_SYMPTOM",
+                    "output_key": "final"
+                }}
+            ],
+            "mode": ExecutionMode.STANDARD.value
+        }
+        result = self._execute_nlse_plan(plan, f"get symptoms for disease {disease_id}")
+        return [s.get("properties", {}) for s in result.get("atoms", [])]
+
+    # --- SOUL & MEMORY INTERFACE (NLSE) ---
+
     def get_random_significant_memory(self, limit: int = 1) -> List[Dict]:
         """
-        NLSE-native version of this function for the Soul's dream cycle.
+        Retrieves a significant memory (atom) from the NLSE, typically for the
+        Soul's dream cycle. This is equivalent to `find_knowledge_gap`.
         """
         plan = {
             "steps": [{"FetchBySignificance": {"limit": limit, "context_key": "final"}}],
-            "mode": "Standard"
+            "mode": ExecutionMode.STANDARD.value
         }
         result = self._execute_nlse_plan(plan, "get random significant memory")
         return result.get("atoms", [])
 
+    # --- PLACEHOLDER & CACHING METHODS ---
+
+    def preload_existing_knowledge(self):
+        """
+        Preloads the name/UUID cache from the NLSE.
+        (This is a placeholder for a method called in __init__ but not defined in the source).
+        """
+        self.logger.info("Preloading existing knowledge cache... (Placeholder)")
+        # A real implementation would query the NLSE for all atoms with a 'name'
+        # property and populate the name_to_uuid_cache and uuid_to_name_cache.
+        # For example:
+        # plan = {"steps": [{"FetchAll": {"context_key": "all_atoms"}}], "mode": "Standard"}
+        # all_atoms = self._execute_nlse_plan(plan, "preload cache")
+        # for atom in all_atoms.get("atoms", []):
+        #     name = atom.get("properties", {}).get("name", {}).get("String")
+        #     if name:
+        #         # Logic to create the appropriate cache key (e.g., "word:name", "concept:name")
+        #         key = f'{atom["label"].lower()}:{name}'
+        #         self.name_to_uuid_cache[key] = atom["id"]
+        #         self.uuid_to_name_cache[atom["id"]] = name
+        pass
+
+    def get_uuid_for_name(self, name: str) -> Optional[str]:
+        """
+        Resolves a name to a UUID using the cache.
+        (This is a placeholder for a method called in query_fact but not defined in the source).
+        """
+        name_lower = name.lower()
+        # Check for prefixed names first, which are more specific
+        keys_to_try = [
+            f"concept_for:word:{name_lower}",
+            f"concept:{name_lower}",
+            f"word:{name_lower}",
+        ]
+        for key in keys_to_try:
+            if key in self.name_to_uuid_cache:
+                return self.name_to_uuid_cache[key]
+
+        # Fallback for names that might not have been cached with a prefix
+        return self.name_to_uuid_cache.get(name)
+
     def validate_fact_with_lve(self, triple: StructuredTriple) -> dict:
         """
-        NLSE-native version. The core LVE logic is now inside the Rust 'Write' step,
-        so this function in Python can be simplified. For now, we'll assume a fact is
-        valid if it can be written. A more complex check could happen here later.
+        Legacy validation check. In the current architecture, validation occurs
+        within the NLSE during the 'Write' operation itself.
         """
-        # This returns a placeholder "valid" response, as the true
-        # validation happens inside the NLSE during the 'learn_fact' call.
-        return {"is_valid": True, "reason": "Validation is now handled by the NLSE on write."}
-        
-    def query_fact(self, subject: str, relationship: str) -> List[str]:
-        self.logger.debug("--- [DEBUG] ENTERING query_fact ---")
-        self.logger.debug(f"[DEBUG] Received query: subject='{subject}', relationship='{relationship}'")
-        
-        subject_uuid = self.get_uuid_for_name(subject)
-        if not subject_uuid:
-            self.logger.warning(f"Query failed: Concept for word '{subject}' is unknown.")
-            return []
-        self.logger.debug(f"[DEBUG] Looked up concept for 'word:{subject.lower()}'. Found UUID: {subject_uuid}")
-
-        relationship_type = relationship.upper()
-        
-        # --- THIS IS THE CORRECT, 2-STEP EXECUTION PLAN ---
-        # It now includes the required 'context_key' field in the Fetch step.
-        plan = {
-            "steps": [
-                {
-                    "Fetch": {
-                        "id": subject_uuid,
-                        "context_key": "start_node" # THE MISSING FIELD
-                    }
-                },
-                {
-                    "Traverse": {
-                        "from_context_key": "start_node",
-                        "rel_type": relationship_type,
-                        "output_key": "final",
-                        # depth is not in your new Traverse struct, so we remove it
-                    }
-                }
-            ],
-            "mode": "Standard"
+        return {
+            "is_valid": True,
+            "reason": "Validation is now handled by the NLSE on write during 'learn_fact'."
         }
 
-        self.logger.debug(f"[DEBUG] Constructed the following ExecutionPlan to send to NLSE:\n{json.dumps(plan, indent=4)}")
 
-        try:
-            result = self._execute_nlse_plan(plan, "query fact")
-            if result and result.get("success"):
-                self.logger.debug("[DEBUG] NLSE query successful.")
-                # Extract the 'name' property from each atom in the results
-                names = [
-                    atom.get("properties", {}).get("name", {}).get("String")
-                    for atom in result.get("atoms", [])
-                    if atom.get("properties", {}).get("name", {}).get("String")
-                ]
-                self.logger.debug(f"--- [DEBUG] EXITING query_fact with results: {names} ---")
-                return names
-            else:
-                error_message = result.get('message', 'Unknown error')
-                self.logger.error(f"NLSE query execution failed. Message: {error_message}")
-                self.logger.debug("--- [DEBUG] EXITING query_fact due to NLSE failure ---")
-                return []
-        except Exception as e:
-            self.logger.error(f"Critical error during NLSE query: {e}", exc_info=True)
-            self.logger.debug("--- [DEBUG] EXITING query_fact due to exception ---")
-            return []
-# Create a singleton instance to be imported by other parts of the app
+# --- SINGLETON INSTANCE ---
+# Create a single, shared instance of the DatabaseManager to be imported by other modules.
 db_manager = DatabaseManager()
