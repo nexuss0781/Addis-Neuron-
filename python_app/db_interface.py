@@ -25,7 +25,6 @@ from models import (AtomType, DiseaseDefinition, ExecutionMode, RelationshipType
 # Initialize the logger for this module
 logger = logging.getLogger(__name__)
 
-
 # --- DATABASE MANAGER CLASS ---
 
 class DatabaseManager:
