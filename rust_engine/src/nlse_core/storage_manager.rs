@@ -412,7 +412,7 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nlse_core::models::{NeuroAtom, AtomType, Value}; // Import Value
+    use crate::nlse_core::models::{NeuroAtom, AtomType, Value};
     use std::fs;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -420,7 +420,6 @@ mod tests {
     fn setup_test_env(test_name: &str) -> String {
         let data_dir = format!("./test_data/{}", test_name);
         let _ = fs::remove_dir_all(&data_dir);
-        fs::create_dir_all(&data_dir).unwrap();
         data_dir
     }
 
@@ -433,9 +432,8 @@ mod tests {
         properties.insert("name".to_string(), Value::String("Socrates".to_string()));
 
         let atom = NeuroAtom {
-            id: Uuid::new_v4(), // Correct way to generate a v4 UUID
+            id: Uuid::new_v4(),
             label: AtomType::Concept,
-            // ... other fields
             significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0,
             properties, emotional_resonance: HashMap::new(), embedded_relationships: vec![]
         };
@@ -445,10 +443,16 @@ mod tests {
         // Simulate a reload
         let sm_reloaded = StorageManager::new(&data_dir).expect("Should reload SM");
         
-        // The atoms are loaded into the public t1_cache
         let fetched_atom = sm_reloaded.t1_cache.get(&atom.id).expect("Atom should be loaded into the cache");
         
         assert_eq!(fetched_atom.id, atom.id);
-        assert_eq!(fetched_atom.properties.get("name").unwrap().as_str().unwrap(), "Socrates");
+        
+        // FIX: Correctly pattern match to get the string out of the Value enum
+        let name_value = fetched_atom.properties.get("name").unwrap();
+        if let Value::String(name) = name_value {
+            assert_eq!(name, "Socrates");
+        } else {
+            panic!("Expected name property to be a Value::String");
+        }
     }
 }

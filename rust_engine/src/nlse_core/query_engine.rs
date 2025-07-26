@@ -231,11 +231,12 @@ impl QueryEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nlse_core::models::{AtomType, RelationshipType};
+    use crate::nlse_core::models::{AtomType, RelationshipType, Value, NeuroAtom, Relationship};
     use std::fs;
     use std::sync::{Arc, Mutex};
     use serde_json::json;
     use uuid::Uuid;
+    use std::collections::HashMap;
 
     fn setup_test_engine(test_name: &str) -> (QueryEngine, Uuid, Uuid) {
         let data_dir = format!("./test_data/{}", test_name);
@@ -247,17 +248,22 @@ mod tests {
         let socrates_id = Uuid::new_v4();
         let man_id = Uuid::new_v4();
 
-        // Pre-populate with data: (Socrates)-[IS_A]->(Man)
+        // FIX: Construct real NeuroAtom structs for the Write plan
+        let socrates_atom = NeuroAtom {
+            id: socrates_id, label: AtomType::Concept,
+            properties: HashMap::from([("name".to_string(), Value::String("Socrates".to_string()))]),
+            embedded_relationships: vec![Relationship { target_id: man_id, rel_type: RelationshipType::IsA, strength: 1.0, access_timestamp: 0 }],
+            significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0, emotional_resonance: HashMap::new()
+        };
+        let man_atom = NeuroAtom {
+            id: man_id, label: AtomType::Concept,
+            properties: HashMap::from([("name".to_string(), Value::String("Man".to_string()))]),
+            embedded_relationships: vec![],
+            significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0, emotional_resonance: HashMap::new()
+        };
+
         let plan = ExecutionPlan {
-            steps: vec![
-                PlanStep::Write(json!({
-                    "id": socrates_id.to_string(), "label": "Concept", "properties": {"name": {"String": "Socrates"}},
-                    "embedded_relationships": [{ "target_id": man_id.to_string(), "rel_type": "IsA" }]
-                })),
-                PlanStep::Write(json!({
-                    "id": man_id.to_string(), "label": "Concept", "properties": {"name": {"String": "Man"}}
-                }))
-            ],
+            steps: vec![ PlanStep::Write(socrates_atom), PlanStep::Write(man_atom) ],
             mode: ExecutionMode::Standard,
         };
         qe.execute(plan);
@@ -268,15 +274,17 @@ mod tests {
     fn test_execute_fetch_plan() {
         let (qe, _, man_id) = setup_test_engine("fetch_plan");
         let fetch_plan = ExecutionPlan {
-            steps: vec![PlanStep::Fetch(json!({"id": man_id.to_string()}))],
+            // FIX: Construct Fetch as a struct with named fields
+            steps: vec![PlanStep::Fetch { id: man_id, context_key: "result".to_string() }],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(fetch_plan);
         assert!(result.success);
-        let final_atoms_vec = result.atoms.last().unwrap();
-        assert_eq!(final_atoms_vec.len(), 1);
-        assert_eq!(final_atoms_vec[0].id, man_id);
+        // FIX: QueryResult.atoms is a Vec<Vec<NeuroAtom>>
+        let final_step_results = result.atoms.last().unwrap();
+        assert_eq!(final_step_results.len(), 1);
+        assert_eq!(final_step_results[0].id, man_id);
     }
 
     #[test]
@@ -284,16 +292,18 @@ mod tests {
         let (qe, socrates_id, man_id) = setup_test_engine("traverse_plan");
         let traverse_plan = ExecutionPlan {
             steps: vec![
-                PlanStep::Fetch(json!({"id": socrates_id.to_string()})),
-                PlanStep::Traverse(json!({"relationship_type": "IsA"}))
+                // FIX: Construct Fetch and Traverse as structs
+                PlanStep::Fetch { id: socrates_id, context_key: "start".to_string() },
+                PlanStep::Traverse { from_context_key: "start".to_string(), rel_type: RelationshipType::IsA, output_key: "end".to_string() }
             ],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(traverse_plan);
         assert!(result.success, "Execution should succeed");
-        let final_atoms_vec = result.atoms.last().expect("Should have results");
-        assert_eq!(final_atoms_vec.len(), 1, "Should find exactly one related atom");
-        assert_eq!(final_atoms_vec[0].id, man_id, "The atom found should be Man");
+        // FIX: Correctly access the Vec<Vec<NeuroAtom>>
+        let final_step_results = result.atoms.last().expect("Should have results");
+        assert_eq!(final_step_results.len(), 1, "Should find exactly one related atom");
+        assert_eq!(final_step_results[0].id, man_id, "The atom found should be Man");
     }
 }
