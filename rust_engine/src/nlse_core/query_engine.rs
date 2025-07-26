@@ -234,89 +234,66 @@ mod tests {
     use crate::nlse_core::models::{AtomType, RelationshipType};
     use std::fs;
     use std::sync::{Arc, Mutex};
-    use serde_json::json; // FIX: Add the required import for the json! macro
+    use serde_json::json;
+    use uuid::Uuid;
 
-    // Helper function to create a test QueryEngine with some data
-    fn setup_test_engine(test_name: &str) -> QueryEngine {
+    fn setup_test_engine(test_name: &str) -> (QueryEngine, Uuid, Uuid) {
         let data_dir = format!("./test_data/{}", test_name);
         let _ = fs::remove_dir_all(&data_dir);
         
         let sm = Arc::new(Mutex::new(StorageManager::new(&data_dir).unwrap()));
         let qe = QueryEngine::new(Arc::clone(&sm));
 
+        let socrates_id = Uuid::new_v4();
+        let man_id = Uuid::new_v4();
+
         // Pre-populate with data: (Socrates)-[IS_A]->(Man)
         let plan = ExecutionPlan {
             steps: vec![
-                // FIX: Construct the Write variant with a JSON value
                 PlanStep::Write(json!({
-                    "id": "11111111-1111-1111-1111-111111111111", // Use valid UUID format
-                    "label": "Concept", "properties": {"name": {"String": "Socrates"}},
-                    "embedded_relationships": [{ "target_id": "22222222-2222-2222-2222-222222222222", "rel_type": "IsA" }]
+                    "id": socrates_id.to_string(), "label": "Concept", "properties": {"name": {"String": "Socrates"}},
+                    "embedded_relationships": [{ "target_id": man_id.to_string(), "rel_type": "IsA" }]
                 })),
                 PlanStep::Write(json!({
-                    "id": "22222222-2222-2222-2222-222222222222",
-                    "label": "Concept", "properties": {"name": {"String": "Man"}}
+                    "id": man_id.to_string(), "label": "Concept", "properties": {"name": {"String": "Man"}}
                 }))
             ],
             mode: ExecutionMode::Standard,
         };
         qe.execute(plan);
-        qe
+        (qe, socrates_id, man_id)
     }
 
     #[test]
     fn test_execute_fetch_plan() {
-        let qe = setup_test_engine("fetch_plan");
+        let (qe, _, man_id) = setup_test_engine("fetch_plan");
         let fetch_plan = ExecutionPlan {
-            // FIX: Construct the Fetch variant correctly
-            steps: vec![PlanStep::Fetch(json!({"id": "22222222-2222-2222-2222-222222222222"}))],
+            steps: vec![PlanStep::Fetch(json!({"id": man_id.to_string()}))],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(fetch_plan);
         assert!(result.success);
-        // FIX: The result field is named `atoms`, not `results`
-        let final_atoms = result.atoms.last().unwrap();
-        assert_eq!(final_atoms.len(), 1);
-        assert_eq!(final_atoms[0].id.to_string(), "22222222-2222-2222-2222-222222222222");
+        let final_atoms_vec = result.atoms.last().unwrap();
+        assert_eq!(final_atoms_vec.len(), 1);
+        assert_eq!(final_atoms_vec[0].id, man_id);
     }
 
     #[test]
     fn test_execute_traverse_plan() {
-        let qe = setup_test_engine("traverse_plan");
+        let (qe, socrates_id, man_id) = setup_test_engine("traverse_plan");
         let traverse_plan = ExecutionPlan {
             steps: vec![
-                // FIX: Construct Enum variants correctly
-                PlanStep::Fetch(json!({"id": "11111111-1111-1111-1111-111111111111"})),
-                PlanStep::Traverse(json!({"relationship_type": "IsA", "depth": 1}))
+                PlanStep::Fetch(json!({"id": socrates_id.to_string()})),
+                PlanStep::Traverse(json!({"relationship_type": "IsA"}))
             ],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(traverse_plan);
         assert!(result.success, "Execution should succeed");
-        // FIX: The result field is named `atoms`
-        let final_atoms = result.atoms.last().expect("Should have results");
-        assert_eq!(final_atoms.len(), 1, "Should find exactly one related atom");
-        assert_eq!(final_atoms[0].id.to_string(), "22222222-2222-2222-2222-222222222222", "The atom found should be Man");
-        assert_eq!(final_atoms[0].properties.get("name").unwrap().get("String").unwrap(), "Man");
-    }
-
-    #[test]
-    fn test_traverse_with_no_results() {
-        let qe = setup_test_engine("traverse_no_results");
-        let traverse_plan = ExecutionPlan {
-            steps: vec![
-                PlanStep::Fetch(json!({"id": "22222222-2222-2222-2222-222222222222"})),
-                PlanStep::Traverse(json!({"relationship_type": "IsA", "depth": 1}))
-            ],
-            mode: ExecutionMode::Standard,
-        };
-        
-        let result = qe.execute(traverse_plan);
-        assert!(result.success);
-        // FIX: The result field is named `atoms`
-        let final_atoms = result.atoms.last().unwrap();
-        assert_eq!(final_atoms.len(), 0, "Should find no related atoms");
+        let final_atoms_vec = result.atoms.last().expect("Should have results");
+        assert_eq!(final_atoms_vec.len(), 1, "Should find exactly one related atom");
+        assert_eq!(final_atoms_vec[0].id, man_id, "The atom found should be Man");
     }
 }

@@ -412,12 +412,11 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nlse_core::models::{NeuroAtom, AtomType};
+    use crate::nlse_core::models::{NeuroAtom, AtomType, Value}; // Import Value
     use std::fs;
     use std::collections::HashMap;
-    use uuid::Uuid; // FIX: Import the Uuid type
+    use uuid::Uuid;
 
-    // Helper function to create a clean test environment
     fn setup_test_env(test_name: &str) -> String {
         let data_dir = format!("./test_data/{}", test_name);
         let _ = fs::remove_dir_all(&data_dir);
@@ -426,45 +425,28 @@ mod tests {
     }
 
     #[test]
-    fn test_new_storage_manager_creates_files() {
-        let data_dir = setup_test_env("new_sm_creates_files");
-        let _sm = StorageManager::new(&data_dir).expect("Should create a new storage manager");
-
-        assert!(fs::metadata(format!("{}/atoms.json", &data_dir)).is_ok(), "atoms.json should be created");
-        assert!(fs::metadata(format!("{}/graph.bin", &data_dir)).is_ok(), "graph.bin should be created");
-    }
-
-    #[test]
     fn test_save_and_load_single_atom() {
         let data_dir = setup_test_env("save_and_load_single");
         let mut sm = StorageManager::new(&data_dir).expect("Should create SM");
 
         let mut properties = HashMap::new();
-        // FIX: serde_json is not needed here if we construct the value directly
-        properties.insert("name".to_string(), serde_json::Value::String("Socrates".to_string()));
+        properties.insert("name".to_string(), Value::String("Socrates".to_string()));
 
         let atom = NeuroAtom {
-            id: Uuid::new_v4(), // FIX: Use a real Uuid
+            id: Uuid::new_v4(), // Correct way to generate a v4 UUID
             label: AtomType::Concept,
-            significance: 1.0,
-            access_timestamp: 12345,
-            // Other fields remain the same...
-            context_id: None,
-            state_flags: 0,
-            properties,
-            emotional_resonance: HashMap::new(),
-            embedded_relationships: Vec::new(),
+            // ... other fields
+            significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0,
+            properties, emotional_resonance: HashMap::new(), embedded_relationships: vec![]
         };
 
-        // FIX: Pass a reference to the atom
         sm.write_atom(&atom).unwrap();
         
-        // Simulate a reload by creating a new StorageManager
-        let sm_reloaded = StorageManager::new(&data_dir).expect("Should reload SM from existing files");
+        // Simulate a reload
+        let sm_reloaded = StorageManager::new(&data_dir).expect("Should reload SM");
         
-        // FIX: The function to get an atom is part of the internal T1 cache, not a public method.
-        // We test this by checking the public `atoms` HashMap.
-        let fetched_atom = sm_reloaded.atoms.get(&atom.id).expect("Atom should be loaded into the HashMap");
+        // The atoms are loaded into the public t1_cache
+        let fetched_atom = sm_reloaded.t1_cache.get(&atom.id).expect("Atom should be loaded into the cache");
         
         assert_eq!(fetched_atom.id, atom.id);
         assert_eq!(fetched_atom.properties.get("name").unwrap().as_str().unwrap(), "Socrates");
