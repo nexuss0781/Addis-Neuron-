@@ -173,10 +173,11 @@ class DatabaseManager:
     def label_concept(self, word_str: str, concept_name: str) -> None:
         """
         Teaches the AGI that a word is the label for a concept, and correctly
-        updates the in-memory cache.
+        updates the in-memory cache by building a valid ExecutionPlan.
         """
         word_str_lower = word_str.lower()
         concept_name_lower = concept_name.lower()
+        current_time = int(time.time())
 
         word_key = f"word:{word_str_lower}"
         concept_key = f"concept:{concept_name_lower}"
@@ -187,18 +188,58 @@ class DatabaseManager:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # Get or create the UUID for the concept
+        # Get or create the UUID for the new concept
         concept_id = self.name_to_uuid_cache.get(concept_key, str(uuid.uuid4()))
 
         # Update both caches with the new concept information.
         self.name_to_uuid_cache[concept_key] = concept_id
         self.uuid_to_name_cache[concept_id] = concept_name
 
-        labeling_relationship = {"target_id": concept_id, "rel_type": RelationshipType.IS_LABEL_FOR.value}
-        word_atom_update = {"id": word_id, "embedded_relationships": [labeling_relationship]}
-        concept_atom_data = {"id": concept_id, "label": "Concept", "properties": {"name": {"String": concept_name}}}
+        # --- THE UNDENIABLE FIX ---
+        # The ExecutionPlan must contain complete NeuroAtom definitions for the Write step.
+        
+        # Define the relationship that links the Word to the Concept
+        labeling_relationship = {
+            "target_id": concept_id,
+            "rel_type": RelationshipType.IS_LABEL_FOR.value,
+            "strength": 1.0,
+            "access_timestamp": current_time,
+        }
 
-        plan = {"steps": [{"Write": concept_atom_data}, {"Write": word_atom_update}], "mode": "Standard"}
+        # Define the full atom structure for the Word, including the new relationship
+        word_atom_update = {
+            "id": word_id,
+            "label": AtomType.Word.value,
+            "significance": 1.0,
+            "access_timestamp": current_time,
+            "properties": {"name": {"String": word_str_lower}},
+            "emotional_resonance": {},
+            "embedded_relationships": [labeling_relationship],
+            "context_id": None,
+            "state_flags": 0,
+        }
+        
+        # Define the full atom structure for the new Concept
+        concept_atom_data = {
+            "id": concept_id,
+            "label": AtomType.Concept.value,
+            "significance": 1.0,
+            "access_timestamp": current_time,
+            "properties": {"name": {"String": concept_name}},
+            "emotional_resonance": {},
+            "embedded_relationships": [],
+            "context_id": None,
+            "state_flags": 0,
+        }
+
+        # The plan now contains two valid Write steps. The NLSE's upsert logic
+        # will correctly merge the new relationship into the existing Word atom.
+        plan = {
+            "steps": [{"Write": concept_atom_data}, {"Write": word_atom_update}],
+            "mode": ExecutionMode.STANDARD.value
+        }
+        # --- END FIX ---
+
         self._execute_nlse_plan(plan, f"label concept '{concept_name}'")
 
     def learn_fact(self, triple: StructuredTriple, heart_orchestrator: Any) -> None:
