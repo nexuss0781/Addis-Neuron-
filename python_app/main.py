@@ -73,21 +73,25 @@ def get_soul_orchestrator(
 ) -> SoulOrchestrator:
     """Dependency provider for the master SoulOrchestrator."""
     if "soul" not in app_state:
+        # --- THE UNDENIABLE FIX ---
+        # We must instantiate all dependencies before using them.
         emotion_crystallizer = EmotionCrystallizer(db_manager)
         imm = InternalMonologueModeler()
         expression_protocol = UnifiedExpressionProtocol()
+        # The 'truth_recognizer' singleton is imported from its module.
+        from truth_recognizer import truth_recognizer 
+        # --- END FIX ---
         
         app_state["soul"] = SoulOrchestrator(
             db_manager=db_manager, health_manager=health_manager,
             heart_orchestrator=heart_orchestrator,
             emotion_crystallizer=emotion_crystallizer,
             priority_learning_queue=priority_learning_queue,
-            truth_recognizer=truth_recognizer, imm_instance=imm,
+            truth_recognizer=truth_recognizer, # Now this variable exists
+            imm_instance=imm,
             expression_protocol_instance=expression_protocol
         )
     return app_state["soul"]
-
-
 # Instrument the app for Prometheus metrics
 Instrumentator().instrument(app).expose(app)
 
