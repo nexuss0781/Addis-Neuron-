@@ -297,38 +297,55 @@ class DatabaseManager:
 
     def query_fact(self, subject: str, relationship: str) -> List[str]:
         """
-        Queries the NLSE for facts related to a subject.
+        Queries the NLSE for facts related to a subject by building a valid
+        Fetch -> Traverse execution plan.
         """
         self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
-
-        # Step 1: Find the UUID for the subject concept.
+        
+        # Find the UUID for the subject concept.
         subject_uuid = self.get_uuid_for_name(subject)
 
         if not subject_uuid:
-            return [] # Return empty list if the concept is unknown
+            self.logger.warning(f"Query failed: Could not find a UUID for the concept '{subject}'.")
+            return []
 
-        self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building plan...")
+        self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building query plan...")
 
-        # Step 2: Build a valid ExecutionPlan.
+        # --- THE UNDENIABLE FIX ---
+        # The ExecutionPlan must include the context keys required by the Rust QueryEngine.
         plan = {
             "steps": [
-                {"Fetch": {"id": subject_uuid}},
-                {"Traverse": {"relationship_type": relationship.upper(), "depth": 1}}
+                {
+                    "Fetch": {
+                        "id": subject_uuid,
+                        "context_key": "start_node" # Define the output of this step
+                    }
+                },
+                {
+                    "Traverse": {
+                        "from_context_key": "start_node", # Use the output of the previous step
+                        "relationship_type": relationship.upper(),
+                        "depth": 1,
+                        "output_key": "result_nodes" # Define the output of this step
+                    }
+                }
             ],
             "mode": "Standard"
         }
+        # --- END FIX ---
 
-        # Step 3: Execute the plan and process results.
         try:
             result_data = self._execute_nlse_plan(plan, "query fact")
+            
             processed_results = []
+            # The Rust QE now returns a more complex object, we need to parse it correctly
             if result_data and "results" in result_data and result_data["results"]:
-                final_atoms = result_data["results"][-1]
+                final_atoms = result_data["results"][-1] # Get atoms from the last step
                 for atom in final_atoms:
                     atom_name = atom.get("properties", {}).get("name", {}).get("String")
                     if atom_name:
                         processed_results.append(atom_name)
-
+            
             self.logger.info(f"Query for '{subject}' found results: {processed_results}")
             return processed_results
 
