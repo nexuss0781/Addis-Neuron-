@@ -273,7 +273,8 @@ mod tests {
     fn test_execute_fetch_plan() {
         let (qe, _, man_id) = setup_test_engine("fetch_plan");
         let fetch_plan = ExecutionPlan {
-            steps: vec![PlanStep::Fetch { id: man_id }],
+            // FIX: Add the required `context_key` field
+            steps: vec![PlanStep::Fetch { id: man_id, context_key: "result".to_string() }],
             mode: ExecutionMode::Standard,
         };
 
@@ -295,8 +296,14 @@ mod tests {
         let (qe, socrates_id, man_id) = setup_test_engine("traverse_plan");
         let traverse_plan = ExecutionPlan {
             steps: vec![
-                PlanStep::Fetch { id: socrates_id },
-                PlanStep::Traverse { relationship_type: RelationshipType::IsA, depth: 1 }
+                // FIX: Add the required `context_key` field
+                PlanStep::Fetch { id: socrates_id, context_key: "start_nodes".to_string() },
+                // FIX: Use the correct field names for Traverse
+                PlanStep::Traverse { 
+                    from_context_key: "start_nodes".to_string(), 
+                    rel_type: RelationshipType::IsA, 
+                    output_key: "end_nodes".to_string() 
+                }
             ],
             mode: ExecutionMode::Standard,
         };
