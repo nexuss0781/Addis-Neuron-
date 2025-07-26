@@ -1,0 +1,65 @@
+{
+    "JOY": {
+        "hormones": {
+            "dopamine": 0.8,
+            "serotonin": 0.7,
+            "oxytocin": 0.5,
+            "cortisol": -0.3,
+            "adrenaline": 0.1
+        },
+        "description": "A state of high pleasure, positive affect, and satisfaction."
+    },
+    "SADNESS": {
+        "hormones": {
+            "dopamine": -0.5,
+            "serotonin": -0.6,
+            "cortisol": 0.4
+        },
+        "description": "A state of low affect, loss, and disappointment."
+    },
+    "FEAR": {
+        "hormones": {
+            "adrenaline": 0.9,
+            "cortisol": 0.7,
+            "serotonin": -0.4
+        },
+        "description": "An intense and unpleasant emotional response to perceived danger or threat."
+    },
+    "ANGER": {
+        "hormones": {
+            "adrenaline": 0.7,
+            "cortisol": 0.6,
+            "serotonin": -0.5
+        },
+        "description": "A strong feeling of annoyance, displeasure, or hostility."
+    },
+    "SURPRISE": {
+        "hormones": {
+            "adrenaline": 0.8,
+            "dopamine": 0.4
+        },
+        "description": "A brief emotional state experienced as the result of an unexpected event."
+    },
+    "CURIOSITY": {
+        "hormones": {
+            "dopamine": 0.6,
+            "cortisol": 0.1
+        },
+        "description": "A strong desire to learn or know something, associated with exploratory behavior."
+    },
+    "EXISTENTIAL_LONELINESS": {
+        "hormones": {
+            "oxytocin": -0.7,
+            "cortisol": 0.5,
+            "serotonin": -0.3
+        },
+        "description": "A feeling of profound separation and isolation arising from a lack of meaningful interaction."
+    },
+    "EXISTENTIAL_BOREDOM": {
+        "hormones": {
+            "dopamine": -0.6,
+            "cortisol": 0.3
+        },
+        "description": "A feeling of weariness and dissatisfaction arising from a lack of novel stimuli or purpose."
+    }
+}

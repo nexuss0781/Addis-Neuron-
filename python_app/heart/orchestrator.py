@@ -27,15 +27,19 @@ class HeartOrchestrator:
         Initializes the Heart Orchestrator, which manages the AGI's emotional state.
         """
         # --- THE UNDENIABLE FIX ---
-        # Store the db_manager and the new emotion_crystallizer instances.
-        self.db_manager = db_manager
-        self.crystallizer = emotion_crystallizer
+        # The logger must be initialized FIRST, before any function that might use it is called.
+        self.logger = logging.getLogger(__name__)
         # --- END FIX ---
 
+        self.db_manager = db_manager
+        self.crystallizer = emotion_crystallizer
         self.hormonal_system = HormonalSystem()
+        
+        # Now it is safe to call the loading function
         self.emotion_prototypes = self._load_emotion_prototypes()
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Heart Orchestrator initialized.")
+        
+        self.logger.info("Heart Orchestrator initialized.")        
+        
     def _load_emotion_prototypes(self) -> Dict[str, Any]:
         """
         Loads the foundational emotion prototypes from a JSON file.
