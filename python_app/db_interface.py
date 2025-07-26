@@ -209,8 +209,8 @@ class DatabaseManager:
         current_time = int(time.time())
 
         # Find Concept IDs for the subject and object words.
-        subject_concept_id = self.get_uuid_for_name(triple.subject)
-        object_concept_id = self.get_uuid_for_name(triple.object)
+        subject_concept_id = self.name_to_uuid_cache.get(f"concept:{triple.subject.lower()}")
+        object_concept_id = self.name_to_uuid_cache.get(f"concept:{triple.object.lower()}")
 
         if not subject_concept_id or not object_concept_id:
             msg = f"Cannot learn fact. Concept for '{triple.subject}' or '{triple.object}' is unknown. Please label them first."
@@ -231,13 +231,8 @@ class DatabaseManager:
         # Create an ExecutionPlan to UPDATE the subject concept atom with this new fact.
         subject_concept_update = {
             "id": subject_concept_id,
-            "label": AtomType.Concept.value,
-            "significance": 1.0,  # This will be boosted by emotion in the NLSE
-            "access_timestamp": current_time,
-            "properties": {"name": {"String": triple.subject}},
             "emotional_resonance": current_emotional_state,
             "embedded_relationships": [fact_relationship],
-            "context_id": None, "state_flags": 0,
         }
 
         plan = {"steps": [{"Write": subject_concept_update}], "mode": ExecutionMode.STANDARD.value}
@@ -253,8 +248,7 @@ class DatabaseManager:
         subject_uuid = self.get_uuid_for_name(subject)
 
         if not subject_uuid:
-            self.logger.warning(f"Query failed: Could not find a UUID for the concept '{subject}'.")
-            return []
+            return [] # Return empty list if the concept is unknown
 
         self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building plan...")
 
@@ -501,22 +495,12 @@ class DatabaseManager:
     def get_uuid_for_name(self, name: str) -> Optional[str]:
         """
         Resolves a human-readable name to its corresponding UUID using the in-memory cache.
-        It intelligently checks for different key formats (e.g., 'concept:name').
         """
-        name_lower = name.lower()
-        keys_to_try = [
-            f"concept:{name_lower}",
-            f"word:{name_lower}",
-            f"concept_for:word:{name_lower}",
-            name_lower
-        ]
-        for key in keys_to_try:
-            if key in self.name_to_uuid_cache:
-                uuid_val = self.name_to_uuid_cache[key]
-                self.logger.debug(f"Cache hit: Found UUID '{uuid_val}' for key '{key}'.")
-                return uuid_val
-        self.logger.warning(f"Cache miss: Could not find UUID for name '{name}' in cache.")
-        return None
+        key = f"concept:{name.lower()}"
+        uuid = self.name_to_uuid_cache.get(key)
+        if not uuid:
+            self.logger.warning(f"Cache miss: Could not find UUID for concept '{name}'.")
+        return uuid
 
     def preload_existing_knowledge(self):
         """
