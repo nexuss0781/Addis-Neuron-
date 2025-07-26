@@ -20,11 +20,20 @@ class HeartOrchestrator:
     triggers hormonal changes, gets the physiological response, and logs
     the resulting "Illusion." It also provides the health-heart bridge.
     """
-    def __init__(self, db_manager_instance: DatabaseManager):
+    def __init__(self, db_manager: 'DatabaseManager', emotion_crystallizer: 'EmotionCrystallizer'):
+        """
+        Initializes the Heart Orchestrator, which manages the AGI's emotional state.
+        """
+        # --- THE UNDENIABLE FIX ---
+        # Store the db_manager and the new emotion_crystallizer instances.
+        self.db_manager = db_manager
+        self.crystallizer = emotion_crystallizer
+        # --- END FIX ---
+
         self.hormonal_system = HormonalSystem()
-        self.virtual_physiology = VirtualPhysiology()
-        self.db_manager = db_manager_instance
-        logger.info("Heart Orchestrator initialized.")
+        self.emotion_prototypes = self._load_emotion_prototypes()
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Heart Orchestrator initialized.")
 
     # Corrected: Moved this function inside the class
     def update_from_health(self, vitals: Dict[str, float]):
