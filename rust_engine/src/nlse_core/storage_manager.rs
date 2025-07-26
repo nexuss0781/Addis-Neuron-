@@ -130,7 +130,12 @@ impl StorageManager {
     pub fn get_atoms_by_type(&self, _atom_type: &AtomType) -> Option<&Vec<Uuid>> { None }
     pub fn get_most_significant_atoms(&self, _limit: usize) -> Vec<Uuid> { vec![] }
     pub fn demote_cold_atoms(&mut self, _max_age_secs: u64) -> io::Result<usize> { Ok(0) }
+    pub fn get_atom_by_id_raw(&self, id: Uuid) -> io::Result<Option<NeuroAtom>> {
+        // In our current design, this is just an alias for the public read_atom method.
+        self.read_atom(id)
+    }
 }
+
 
 
 // --- UNIT TESTS --- (Unchanged, but will now work)
