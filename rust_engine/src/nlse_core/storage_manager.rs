@@ -40,37 +40,50 @@ pub struct StorageManager {
 
 // --- StorageManager Implementation ---
 impl StorageManager {
-    pub fn new<P: AsRef<Path>>(base_path: P) -> io::Result<Self> {
-        let journal_path = base_path.as_ref().join("journal.log");
-        let t3_path = base_path.as_ref().join("brain.db");
-        let t2_path = base_path.as_ref().join("brain_cache.db");
+    pub fn new(data_dir: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let atoms_path = format!("{}/atoms.json", data_dir);
+        let graph_path = format!("{}/graph.bin", data_dir);
 
-        let mut journal_file = OpenOptions::new().read(true).write(true).create(true).open(&journal_path)?;
-        let mut t2_file = OpenOptions::new().read(true).write(true).create(true).open(&t2_path)?;
-        let mut t3_file = OpenOptions::new().read(true).write(true).create(true).open(&t3_path)?;
+        // --- THE UNDENIABLE FIX ---
+        // If the data directory doesn't exist, create it.
+        fs::create_dir_all(data_dir)?;
 
-        // Attempt recovery from journal *before* loading main indexes
-        Self::recover_from_journal(&mut journal_file, &mut t2_file, &mut t3_file)?;
+        // If atoms.json doesn't exist, create it with an empty list.
+        if fs::metadata(&atoms_path).is_err() {
+            fs::write(&atoms_path, "[]")?;
+        }
 
-        // Re-map T2 file after potential recovery writes
-        let t2_mmap = unsafe { Mmap::map(&t2_file).unwrap_or_else(|_| Mmap::map(&File::create(&t2_path).unwrap()).unwrap()) };
-        
-        // Rebuild all indexes from the clean data files
-        let (primary, relationship, context, significance, types) =
-            Self::rebuild_indexes(&t3_path, &t2_path)?;
-        
-        println!("NLSE: StorageManager initialized.");
+        // If graph.bin doesn't exist, create an empty file.
+        if fs::metadata(&graph_path).is_err() {
+            fs::File::create(&graph_path)?;
+        }
+        // --- END FIX ---
+
+        // Now that we've guaranteed the files exist, we can safely open them.
+        let atoms_file = fs::File::open(&atoms_path)?;
+        let atoms: HashMap<Uuid, NeuroAtom> = serde_json::from_reader(atoms_file)?;
+
+        let graph_file = fs::File::open(&graph_path)?;
+        let graph: PetGraph<Uuid, Relationship> =
+            bincode::deserialize_from(graph_file).unwrap_or_else(|_| PetGraph::new());
+
+        let name_to_uuid = atoms
+            .values()
+            .filter_map(|atom| {
+                if let Some(Value::String(name)) = atom.properties.get("name") {
+                    Some((name.clone(), atom.id))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         Ok(StorageManager {
-            journal_file,
-            t1_cache: HashMap::new(),
-            t3_file,
-            t2_file,
-            t2_mmap,
-            primary_index: primary,
-            relationship_index: relationship,
-            context_index: context,
-            significance_index: significance,
-            type_index: types,
+            data_dir: data_dir.to_string(),
+            atoms: atoms.clone(),
+            graph,
+            t1_cache: atoms, // Initialize T1 cache with all atoms
+            name_to_uuid,
         })
     }
 
