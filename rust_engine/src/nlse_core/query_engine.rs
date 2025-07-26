@@ -234,7 +234,6 @@ mod tests {
     use crate::nlse_core::models::{AtomType, RelationshipType, Value, NeuroAtom, Relationship};
     use std::fs;
     use std::sync::{Arc, Mutex};
-    use serde_json::json;
     use uuid::Uuid;
     use std::collections::HashMap;
 
@@ -248,11 +247,11 @@ mod tests {
         let socrates_id = Uuid::new_v4();
         let man_id = Uuid::new_v4();
 
-        // FIX: Construct real NeuroAtom structs for the Write plan
         let socrates_atom = NeuroAtom {
             id: socrates_id, label: AtomType::Concept,
             properties: HashMap::from([("name".to_string(), Value::String("Socrates".to_string()))]),
             embedded_relationships: vec![Relationship { target_id: man_id, rel_type: RelationshipType::IsA, strength: 1.0, access_timestamp: 0 }],
+            // Fill in other fields with default values
             significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0, emotional_resonance: HashMap::new()
         };
         let man_atom = NeuroAtom {
@@ -274,17 +273,21 @@ mod tests {
     fn test_execute_fetch_plan() {
         let (qe, _, man_id) = setup_test_engine("fetch_plan");
         let fetch_plan = ExecutionPlan {
-            // FIX: Construct Fetch as a struct with named fields
-            steps: vec![PlanStep::Fetch { id: man_id, context_key: "result".to_string() }],
+            steps: vec![PlanStep::Fetch { id: man_id }],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(fetch_plan);
         assert!(result.success);
-        // FIX: QueryResult.atoms is a Vec<Vec<NeuroAtom>>
-        let final_step_results = result.atoms.last().unwrap();
-        assert_eq!(final_step_results.len(), 1);
-        assert_eq!(final_step_results[0].id, man_id);
+        
+        // FIX: `result.atoms` is a Vec<Vec<NeuroAtom>>. Get the last inner Vec.
+        let final_step_results_vec = result.atoms.last().unwrap();
+        
+        // FIX: Now call .len() on the inner Vec.
+        assert_eq!(final_step_results_vec.len(), 1);
+        
+        // FIX: Now index into the inner Vec.
+        assert_eq!(final_step_results_vec[0].id, man_id);
     }
 
     #[test]
@@ -292,18 +295,22 @@ mod tests {
         let (qe, socrates_id, man_id) = setup_test_engine("traverse_plan");
         let traverse_plan = ExecutionPlan {
             steps: vec![
-                // FIX: Construct Fetch and Traverse as structs
-                PlanStep::Fetch { id: socrates_id, context_key: "start".to_string() },
-                PlanStep::Traverse { from_context_key: "start".to_string(), rel_type: RelationshipType::IsA, output_key: "end".to_string() }
+                PlanStep::Fetch { id: socrates_id },
+                PlanStep::Traverse { relationship_type: RelationshipType::IsA, depth: 1 }
             ],
             mode: ExecutionMode::Standard,
         };
 
         let result = qe.execute(traverse_plan);
         assert!(result.success, "Execution should succeed");
-        // FIX: Correctly access the Vec<Vec<NeuroAtom>>
-        let final_step_results = result.atoms.last().expect("Should have results");
-        assert_eq!(final_step_results.len(), 1, "Should find exactly one related atom");
-        assert_eq!(final_step_results[0].id, man_id, "The atom found should be Man");
+
+        // FIX: `result.atoms` is a Vec<Vec<NeuroAtom>>. Get the last inner Vec.
+        let final_step_results_vec = result.atoms.last().expect("Should have results");
+
+        // FIX: Now call .len() on the inner Vec.
+        assert_eq!(final_step_results_vec.len(), 1, "Should find exactly one related atom");
+        
+        // FIX: Now index into the inner Vec.
+        assert_eq!(final_step_results_vec[0].id, man_id, "The atom found should be Man");
     }
 }

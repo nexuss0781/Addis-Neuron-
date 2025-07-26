@@ -49,14 +49,12 @@ impl NeuroAtom {
     /// Helper function to create a simple new Concept atom.
     pub fn new_concept(name: &str) -> Self {
         let mut properties = HashMap::new();
-        // --- THIS LINE IS CORRECTED ---
         properties.insert("name".to_string(), Value::String(name.to_string()));
-
         NeuroAtom {
-            id: Uuid::now_v7(),
+            id: Uuid::new_v4(), // FIX: Use the correct function to generate a v4 UUID
             label: AtomType::Concept,
             significance: 1.0,
-            access_timestamp: 0, // Should be set by storage manager
+            access_timestamp: 0, // Should be set by StorageManager on write
             context_id: None,
             state_flags: 0,
             properties,
