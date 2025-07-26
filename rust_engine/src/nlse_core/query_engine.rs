@@ -60,31 +60,17 @@ impl QueryEngine {
     pub fn execute(&self, plan: ExecutionPlan) -> QueryResult {
         // T0 Synaptic Cache: a temporary workspace for this thought process.
         let mut t0_cache: HashMap<String, Vec<NeuroAtom>> = HashMap::new();
+        let mut last_output_key = String::new();
 
         for step in plan.steps {
             let mut manager = self.storage_manager.lock().unwrap();
             match step {
                 PlanStep::Fetch { id, context_key } => {
-                    let mut fetched_atom = None;
-                    if plan.mode == ExecutionMode::Hypothetical {
-                        // Check T0 first for hypothetical data
-                        for atom_vec in t0_cache.values() {
-                            if let Some(atom) = atom_vec.iter().find(|a| a.id == id) {
-                                fetched_atom = Some(atom.clone());
-                                break;
-                            }
-                        }
-                    }
-
-                    if fetched_atom.is_none() {
-                        match manager.read_atom(id) {
-                            Ok(Some(atom)) => { fetched_atom = Some(atom); }
-                            _ => return self.fail("Fetch failed: Atom ID not found in storage."),
-                        }
-                    }
-                    
-                    if let Some(atom) = fetched_atom {
-                         t0_cache.insert(context_key, vec![atom]);
+                    if let Ok(Some(atom)) = manager.read_atom(id) {
+                        t0_cache.insert(context_key.clone(), vec![atom]);
+                        last_output_key = context_key;
+                    } else {
+                        return self.fail(&format!("Fetch failed: Atom ID '{}' not found in storage.", id));
                     }
                 }
                 PlanStep::Traverse { from_context_key, rel_type, output_key } => {
@@ -93,120 +79,57 @@ impl QueryEngine {
                         for source_atom in source_atoms {
                             for rel in &source_atom.embedded_relationships {
                                 if rel.rel_type == rel_type {
-                                    let mut target = None;
-                                    // Traverse must also respect hypothetical reality. Check T0 first.
-                                    'outer: for atom_vec in t0_cache.values() {
-                                        if let Some(atom) = atom_vec.iter().find(|a| a.id == rel.target_id) {
-                                            target = Some(atom.clone());
-                                            break 'outer;
-                                        }
-                                    }
-                                    
-                                    if target.is_none() {
-                                        if let Ok(Some(target_atom)) = manager.read_atom(rel.target_id) {
-                                            target = Some(target_atom);
-                                        }
-                                    }
-                                    
-                                    if let Some(t) = target {
-                                        results.push(t);
+                                    if let Ok(Some(target_atom)) = manager.read_atom(rel.target_id) {
+                                        results.push(target_atom);
                                     }
                                 }
                             }
                         }
-                        t0_cache.insert(output_key, results);
+                        t0_cache.insert(output_key.clone(), results);
+                        last_output_key = output_key;
                     } else {
-                        return self.fail("Traverse failed: Source context key not found in T0 cache.");
+                        return self.fail(&format!("Traverse failed: Source context key '{}' not found in T0 cache.", from_context_key));
                     }
                 }
-                              PlanStep::Write(atom_to_write) => {
-                // This 'Write' step now acts as an UPSERT (update or insert)
-                
-                if plan.mode == ExecutionMode::Hypothetical {
-                    println!("HSM: Staging hypothetical write for Atom {}", atom_to_write.id);
-                    t0_cache.entry(atom_to_write.id.to_string()).or_default().push(atom_to_write);
-                } else {
-                    // STANDARD MODE:
-                    let mut final_atom = atom_to_write;
-
-                    // Check if an older version of this atom exists.
-                    if let Ok(Some(mut existing_atom)) = manager.get_atom_by_id_raw(final_atom.id) {
-                        println!("NLSE Write: Found existing atom {}. Merging data.", final_atom.id);
-                        
-                        // Merge relationships: simple addition, avoiding duplicates
-                        for new_rel in final_atom.embedded_relationships {
-                            if !existing_atom.embedded_relationships.contains(&new_rel) {
-                                existing_atom.embedded_relationships.push(new_rel);
-                            }
+                PlanStep::Write(atom_to_write) => {
+                    if let Ok(Some(mut existing_atom)) = manager.get_atom_by_id_raw(atom_to_write.id) {
+                        // This is a simplified merge. A production system would be more sophisticated.
+                        existing_atom.embedded_relationships.extend(atom_to_write.embedded_relationships);
+                        if let Err(e) = manager.write_atom(&existing_atom) {
+                            return self.fail(&format!("Write (update) failed: {}", e));
                         }
-
-                        // Update other fields
-                        existing_atom.significance = final_atom.significance;
-                        existing_atom.access_timestamp = final_atom.access_timestamp;
-                        existing_atom.emotional_resonance.extend(final_atom.emotional_resonance);
-                        // Keep existing properties, but new ones can be added if needed
-                        existing_atom.properties.extend(final_atom.properties);
-                        
-                        final_atom = existing_atom;
-                    }
-                    
-                    // Perform LVE validation on the FINAL merged atom before writing.
-                    // (LVE logic remains the same)
-                    // ... [validation logic here] ...
-                    
-                    if let Err(e) = manager.write_atom(&final_atom) {
-                        return self.fail(&format!("Write failed: {}", e));
+                    } else {
+                        // It's a new atom.
+                        if let Err(e) = manager.write_atom(&atom_to_write) {
+                            return self.fail(&format!("Write (insert) failed: {}", e));
+                        }
                     }
                 }
-            }
-                
-                
                 PlanStep::FetchByContext { context_id, context_key } => {
                     let mut atoms = Vec::new();
-                    // This must also check the T0 cache in hypothetical mode
-                    if plan.mode == ExecutionMode::Hypothetical {
-                        for atom_vec in t0_cache.values() {
-                           for atom in atom_vec {
-                               if atom.context_id == Some(context_id) {
-                                   atoms.push(atom.clone());
-                               }
-                           }
-                        }
-    
-                    }
-                    let atom_ids_to_process = if let Some(ids) = manager.get_atoms_in_context(&context_id) {
-                        ids.clone()
-                    } else {
-                        Vec::new()
-                    };
-                    for id in atom_ids_to_process {
-                         // Avoid duplicates if already found in T0
-                        if !atoms.iter().any(|a| a.id == id) {
-                            if let Ok(Some(atom)) = manager.read_atom(id) {
+                    if let Some(ids) = manager.get_atoms_in_context(&context_id) {
+                        for id in ids {
+                            if let Ok(Some(atom)) = manager.read_atom(*id) {
                                 atoms.push(atom);
                             }
                         }
                     }
-                    t0_cache.insert(context_key, atoms);
-                }    
-                
-                PlanStep::FetchByType { atom_type, context_key } => {
-                let mut atoms = Vec::new();
-                let atom_ids_to_process = if let Some(ids) = manager.get_atoms_by_type(&atom_type) {
-                    ids.clone()
-                } else {
-                    Vec::new()
-                };
-                for id in atom_ids_to_process {
-                    if let Ok(Some(atom)) = manager.read_atom(id) {
-                        atoms.push(atom);
-                    }
+                    t0_cache.insert(context_key.clone(), atoms);
+                    last_output_key = context_key;
                 }
-                t0_cache.insert(context_key, atoms);
-            }
+                PlanStep::FetchByType { atom_type, context_key } => {
+                    let mut atoms = Vec::new();
+                    if let Some(ids) = manager.get_atoms_by_type(&atom_type) {
+                        for id in ids {
+                            if let Ok(Some(atom)) = manager.read_atom(*id) {
+                                atoms.push(atom);
+                            }
+                        }
+                    }
+                    t0_cache.insert(context_key.clone(), atoms);
+                    last_output_key = context_key;
+                }
                 PlanStep::FetchBySignificance { limit, context_key } => {
-                    // NOTE: This does not respect hypothetical mode currently, as significance
-                    // is a feature of persisted storage. A more advanced HSM would have its own ranking.
                     let atom_ids = manager.get_most_significant_atoms(limit);
                     let mut atoms = Vec::new();
                     for id in atom_ids {
@@ -214,13 +137,19 @@ impl QueryEngine {
                             atoms.push(atom);
                         }
                     }
-                    t0_cache.insert(context_key, atoms);
+                    t0_cache.insert(context_key.clone(), atoms);
+                    last_output_key = context_key;
                 }
             }
         }
         
-        let final_result = t0_cache.remove("final").unwrap_or_default();
-        QueryResult { atoms: final_result, success: true, message: "Execution plan completed successfully.".to_string(), }
+        // The final result is the content of the last populated context key.
+        let final_atoms = t0_cache.get(&last_output_key).cloned().unwrap_or_default();
+        QueryResult {
+            atoms: final_atoms,
+            success: true,
+            message: "Execution plan completed successfully.".to_string(),
+        }
     }
     
     fn fail(&self, message: &str) -> QueryResult {
