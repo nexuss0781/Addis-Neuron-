@@ -227,3 +227,89 @@ impl QueryEngine {
         QueryResult { atoms: vec![], success: false, message: message.to_string(), }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nlse_core::models::{AtomType, RelationshipType};
+    use std::fs;
+    use std::sync::{Arc, Mutex};
+    
+    // Helper function to create a test QueryEngine with some data
+    fn setup_test_engine(test_name: &str) -> QueryEngine {
+        let data_dir = format!("./test_data/{}", test_name);
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).unwrap();
+        
+        let sm = Arc::new(Mutex::new(StorageManager::new(&data_dir).unwrap()));
+        let qe = QueryEngine::new(Arc::clone(&sm));
+
+        // Pre-populate with data: (Socrates)-[IS_A]->(Man)
+        let plan = ExecutionPlan {
+            steps: vec![
+                PlanStep::Write(serde_json::json!({
+                    "id": "uuid-socrates", "label": "Concept", "properties": {"name": {"String": "Socrates"}},
+                    "embedded_relationships": [{ "target_id": "uuid-man", "rel_type": "IsA" }]
+                })),
+                PlanStep::Write(serde_json::json!({
+                    "id": "uuid-man", "label": "Concept", "properties": {"name": {"String": "Man"}}
+                }))
+            ],
+            mode: ExecutionMode::Standard,
+        };
+        qe.execute(plan);
+        qe
+    }
+
+    #[test]
+    fn test_execute_fetch_plan() {
+        let qe = setup_test_engine("fetch_plan");
+        let fetch_plan = ExecutionPlan {
+            steps: vec![PlanStep::Fetch(serde_json::json!({"id": "uuid-man"}))],
+            mode: ExecutionMode::Standard,
+        };
+
+        let result = qe.execute(fetch_plan);
+        assert!(result.success);
+        let final_atoms = result.results.last().unwrap();
+        assert_eq!(final_atoms.len(), 1);
+        assert_eq!(final_atoms[0].id, "uuid-man");
+    }
+
+    #[test]
+    fn test_execute_traverse_plan() {
+        let qe = setup_test_engine("traverse_plan");
+        let traverse_plan = ExecutionPlan {
+            steps: vec![
+                PlanStep::Fetch(serde_json::json!({"id": "uuid-socrates"})),
+                PlanStep::Traverse(serde_json::json!({"relationship_type": "IsA", "depth": 1}))
+            ],
+            mode: ExecutionMode::Standard,
+        };
+
+        let result = qe.execute(traverse_plan);
+        assert!(result.success, "Execution should succeed");
+        let final_atoms = result.results.last().expect("Should have results");
+        assert_eq!(final_atoms.len(), 1, "Should find exactly one related atom");
+        assert_eq!(final_atoms[0].id, "uuid-man", "The atom found should be Man");
+        assert_eq!(final_atoms[0].properties.get("name").unwrap().get("String").unwrap(), "Man");
+    }
+
+    #[test]
+    fn test_traverse_with_no_results() {
+        let qe = setup_test_engine("traverse_no_results");
+        // Try to traverse from Man, which has no outgoing relationships
+        let traverse_plan = ExecutionPlan {
+            steps: vec![
+                PlanStep::Fetch(serde_json::json!({"id": "uuid-man"})),
+                PlanStep::Traverse(serde_json::json!({"relationship_type": "IsA", "depth": 1}))
+            ],
+            mode: ExecutionMode::Standard,
+        };
+        
+        let result = qe.execute(traverse_plan);
+        assert!(result.success);
+        let final_atoms = result.results.last().unwrap();
+        assert_eq!(final_atoms.len(), 0, "Should find no related atoms");
+    }
+}

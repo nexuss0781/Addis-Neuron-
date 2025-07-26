@@ -558,3 +558,59 @@ mod tests {
         assert!(matches!(t2_loc, AtomLocation::T2(_)));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nlse_core::models::{NeuroAtom, AtomType};
+    use std::fs;
+    use std::collections::HashMap;
+
+    // Helper function to create a clean test environment
+    fn setup_test_env(test_name: &str) -> String {
+        let data_dir = format!("./test_data/{}", test_name);
+        // Clean up any previous test runs
+        let _ = fs::remove_dir_all(&data_dir);
+        fs::create_dir_all(&data_dir).unwrap();
+        data_dir
+    }
+
+    #[test]
+    fn test_new_storage_manager_creates_files() {
+        let data_dir = setup_test_env("new_sm_creates_files");
+        let _sm = StorageManager::new(&data_dir).expect("Should create a new storage manager");
+
+        assert!(fs::metadata(format!("{}/atoms.json", &data_dir)).is_ok(), "atoms.json should be created");
+        assert!(fs::metadata(format!("{}/graph.bin", &data_dir)).is_ok(), "graph.bin should be created");
+    }
+
+    #[test]
+    fn test_save_and_load_single_atom() {
+        let data_dir = setup_test_env("save_and_load_single");
+        let mut sm = StorageManager::new(&data_dir).expect("Should create SM");
+
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), serde_json::json!({"String": "Socrates"}));
+
+        let atom = NeuroAtom {
+            id: "uuid-socrates".to_string(),
+            label: AtomType::Concept,
+            significance: 1.0,
+            access_timestamp: 12345,
+            context_id: None,
+            state_flags: 0,
+            properties,
+            emotional_resonance: HashMap::new(),
+            embedded_relationships: Vec::new(),
+        };
+
+        sm.write_atom(atom.clone()).unwrap();
+        
+        // Now, create a new StorageManager to simulate a reload
+        let sm_reloaded = StorageManager::new(&data_dir).expect("Should reload SM from existing files");
+        
+        let fetched_atom = sm_reloaded.get_atom("uuid-socrates").unwrap();
+        assert_eq!(fetched_atom.id, "uuid-socrates");
+        assert_eq!(fetched_atom.properties.get("name").unwrap().get("String").unwrap(), "Socrates");
+    }
+}
