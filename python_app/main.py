@@ -2,240 +2,171 @@ import logging
 import asyncio
 import requests
 from requests.exceptions import RequestException
-from queue import Queue # For priority_learning_queue
+from queue import Queue
+from typing import Dict, Any
 
 # --- FastAPI and Prometheus ---
-from fastapi import FastAPI, HTTPException
-from prometheus_fastapi_instrumentator import Instrumentator # For metrics
+from fastapi import FastAPI, HTTPException, Depends
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # --- Core AGI Component Imports ---
-# Central DB Manager
-from db_interface import db_manager
-
-# Brain
+from db_interface import DatabaseManager
 from cerebellum import cerebellum_formatter
-from truth_recognizer import truth_recognizer
-
-# Heart
+from truth_recognizer import TruthRecognizer
 from heart.orchestrator import HeartOrchestrator
 from heart.crystallizer import EmotionCrystallizer
-
-# Health
 from health.manager import HealthManager
-
 from health.judiciary import judiciary, Verdict
-
-# Soul (NEW MASTER ORCHESTRATOR)
 from soul.orchestrator import SoulOrchestrator
-from soul.axioms import pre_execution_check # For self-preservation checks
+from soul.axioms import pre_execution_check
+from soul.internal_monologue import InternalMonologueModeler
+from soul.expression_protocol import UnifiedExpressionProtocol
+from neo4j.exceptions import ServiceUnavailable
 
 # --- Pydantic Models for API Requests ---
 from models import (
-    StructuredTriple,
-    PlanRequest,
-    LabelEmotionRequest,
-    DamageRequest,
-    DiseaseRequest,
-    MedicationRequest,
-    SelfCorrectionRequest,
-    LearningRequest,# Corrected: SelfCorrectionRequ to SelfCorrectionRequest
-    ErrorRequest,
-    DiseaseDefinition,
-    DangerousCommandRequest # For testing self-preservation
+    StructuredTriple, PlanRequest, LabelEmotionRequest, DamageRequest,
+    DiseaseRequest, MedicationRequest, SelfCorrectionRequest, LearningRequest,
+    ErrorRequest, DiseaseDefinition, DangerousCommandRequest
 )
-
 
 # --- 1. GLOBAL SETUP ---
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(name)s:%(levelname)s:%(message)s')
 logger = logging.getLogger(__name__)
+app = FastAPI(title="Agile Mind AGI", description="The central cognitive API for the AGI.")
 
-# Create the main FastAPI application instance
-app = FastAPI(title="Agile Mind AGI")
+# --- 2. DEPENDENCY INJECTION SETUP (The Core Fix) ---
+# This is the robust, testable way to manage shared components.
 
-# --- Initialize Global Components (Singletons) ---
-# These are the "body parts" of the AGI
-health_manager = HealthManager()
-heart_orchestrator = HeartOrchestrator(db_manager)
-emotion_crystallizer = EmotionCrystallizer(db_manager)
+# Create a dictionary to hold our singleton instances
+app_state: Dict[str, Any] = {}
 
-# A thread-safe queue for high-priority learning targets from the Judiciary
-priority_learning_queue = Queue()
+def get_db_manager() -> DatabaseManager:
+    """Dependency provider for the DatabaseManager."""
+    if "db_manager" not in app_state:
+        app_state["db_manager"] = DatabaseManager()
+    return app_state["db_manager"]
 
-# The AGI's private internal mind
-from soul.internal_monologue import InternalMonologueModeler # Import here to avoid circular dep with SoulOrchestrator
-imm = InternalMonologueModeler()
+def get_health_manager() -> HealthManager:
+    """Dependency provider for the HealthManager."""
+    if "health_manager" not in app_state:
+        app_state["health_manager"] = HealthManager()
+    return app_state["health_manager"]
 
-# The AGI's voice
-from soul.expression_protocol import UnifiedExpressionProtocol # Import here to avoid circular dep with SoulOrchestrator
-expression_protocol = UnifiedExpressionProtocol()
+def get_heart_orchestrator(db_manager: DatabaseManager = Depends(get_db_manager)) -> HeartOrchestrator:
+    """Dependency provider for the HeartOrchestrator."""
+    if "heart_orchestrator" not in app_state:
+        app_state["heart_orchestrator"] = HeartOrchestrator(db_manager)
+    return app_state["heart_orchestrator"]
+    
+def get_priority_queue() -> Queue:
+    """Dependency provider for the priority learning queue."""
+    if "priority_learning_queue" not in app_state:
+        app_state["priority_learning_queue"] = Queue()
+    return app_state["priority_learning_queue"]
 
-# The Soul Orchestrator is the conductor of the entire system
-soul = SoulOrchestrator(
-    db_manager=db_manager,
-    health_manager=health_manager,
-    heart_orchestrator=heart_orchestrator,
-    emotion_crystallizer=emotion_crystallizer,
-    priority_learning_queue=priority_learning_queue,
-    truth_recognizer=truth_recognizer,
-    imm_instance=imm, # Pass the IMM instance
-    expression_protocol_instance=expression_protocol # Pass the Expression Protocol instance
-)
+def get_soul_orchestrator(
+    db_manager: DatabaseManager = Depends(get_db_manager),
+    health_manager: HealthManager = Depends(get_health_manager),
+    heart_orchestrator: HeartOrchestrator = Depends(get_heart_orchestrator),
+    priority_learning_queue: Queue = Depends(get_priority_queue)
+) -> SoulOrchestrator:
+    """Dependency provider for the master SoulOrchestrator."""
+    if "soul" not in app_state:
+        emotion_crystallizer = EmotionCrystallizer(db_manager)
+        imm = InternalMonologueModeler()
+        expression_protocol = UnifiedExpressionProtocol()
+        
+        app_state["soul"] = SoulOrchestrator(
+            db_manager=db_manager, health_manager=health_manager,
+            heart_orchestrator=heart_orchestrator,
+            emotion_crystallizer=emotion_crystallizer,
+            priority_learning_queue=priority_learning_queue,
+            truth_recognizer=truth_recognizer, imm_instance=imm,
+            expression_protocol_instance=expression_protocol
+        )
+    return app_state["soul"]
 
 
-# Correctly instrument the app for Prometheus metrics BEFORE startup events
+# Instrument the app for Prometheus metrics
 Instrumentator().instrument(app).expose(app)
 
-# Define constants
-LOGICAL_ENGINE_URL = "http://127.0.0.1:8000"
-
-
-# --- 2. APP LIFECYCLE EVENTS ---
+# --- 3. APP LIFECYCLE EVENTS ---
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    On startup, the only thing we do is launch the Soul's main life cycle.
-    All other background tasks are now managed internally by the Soul.
-    """
-    logger.info("AGI system startup initiated. Starting the Soul...")
+    """On startup, we initialize the components and launch the Soul's life cycle."""
+    logger.info("AGI system startup initiated. Initializing components via dependency injection...")
+    # By calling the main dependency function once, we trigger the creation of all singletons.
+    soul = get_soul_orchestrator(
+        get_db_manager(),
+        get_health_manager(),
+        get_heart_orchestrator(get_db_manager()),
+        get_priority_queue()
+    )
+    logger.info("Starting the Soul's main life cycle...")
     asyncio.create_task(soul.live())
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("AGI system shutting down...")
-    db_manager.close()
+    if "db_manager" in app_state:
+        app_state["db_manager"].close()
 
-
-# --- 3. API ENDPOINTS ---
-# These endpoints are the AGI's interface to the external world.
-
-# --- [THE FIX] ---
-# We must import the exception we are trying to catch in the /query endpoint.
-from neo4j.exceptions import ServiceUnavailable
+# --- 4. API ENDPOINTS ---
+# Each endpoint now uses `Depends` to get the components it needs.
 
 @app.get("/health", summary="Basic API health check")
 async def api_health_check():
-    """Provides a basic health check of the API."""
     return {"api_status": "ok", "soul_status": "alive"}
 
-@app.get("/test_integration", summary="Test full system connectivity")
-async def test_integration():
-    """Performs a full system smoke test."""
-    soul.record_interaction()
-    logger.info("Performing full integration test...")
-    db_status = db_manager.ping_databases()
-    try:
-        response = requests.get(f"{LOGICAL_ENGINE_URL}/health", timeout=5)
-        response.raise_for_status()
-        rust_service_status = response.json()
-    except RequestException as e:
-        raise HTTPException(status_code=503, detail=f"Failed to connect to logical_engine: {e}")
-
-    return {
-        "message": "Full system integration test successful!",
-        "orchestrator_database_status": db_status,
-        "logical_engine_status": rust_service_status,
-    }
-
 @app.post("/learn", status_code=201, summary="Teach the brain a new word, concept, or fact")
-async def learn_endpoint(request: LearningRequest):
-    """
-    The new, unified 'Thalamus'. It receives a structured lesson plan
-    and routes it to the appropriate cognitive function for learning.
-    """
+async def learn_endpoint(
+    request: LearningRequest,
+    db_manager: DatabaseManager = Depends(get_db_manager),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator),
+    heart: HeartOrchestrator = Depends(get_heart_orchestrator)
+):
     soul.record_interaction()
-    
     try:
         if request.learning_type == "WORD":
-            word = request.payload.get("word")
-            if not word: raise HTTPException(status_code=400, detail="Payload for WORD learning must include a 'word' key.")
-            db_manager.learn_word(word)
-            return {"message": f"Word '{word}' learning process initiated."}
-
+            db_manager.learn_word(request.payload["word"])
+            return {"message": f"Word '{request.payload['word']}' learning process initiated."}
         elif request.learning_type == "CONCEPT_LABELING":
-            word = request.payload.get("word")
-            concept_name = request.payload.get("concept_name")
-            if not word or not concept_name:
-                raise HTTPException(status_code=400, detail="Payload for CONCEPT_LABELING must include 'word' and 'concept_name'.")
-            db_manager.label_concept(word, concept_name)
-            return {"message": f"Labeling concept '{concept_name}' with word '{word}' process initiated."}
-        
+            db_manager.label_concept(request.payload["word"], request.payload["concept_name"])
+            return {"message": f"Labeling concept '{request.payload['concept_name']}' with word '{request.payload['word']}' process initiated."}
         elif request.learning_type == "FACT":
             fact = StructuredTriple(**request.payload)
-            
             if not pre_execution_check("LEARN_FACT", fact.dict()):
                 raise HTTPException(status_code=403, detail="Action violates a core self-preservation axiom.")
-            
-            db_manager.learn_fact(fact, heart_orchestrator)
+            db_manager.learn_fact(fact, heart)
             soul.record_new_fact()
             return {"message": "Fact validated and learned successfully", "fact": fact}
-        
-        else:
-            raise HTTPException(status_code=400, detail="Unknown learning_type specified.")
-
-    except HTTPException as e:
-        raise e
-    except ValueError as e: # Catch the specific logical error from db_manager
+    except (ValueError, KeyError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"UNEXPECTED ERROR during learning: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
-# REPLACE WITH THIS (The corrected version)
-@app.get("/query")
-async def query_endpoint(subject: str, relationship: str):
+@app.get("/query", summary="Query the AGI's knowledge base")
+async def query_endpoint(
+    subject: str,
+    relationship: str,
+    db_manager: DatabaseManager = Depends(get_db_manager)
+):
     try:
-        # The keyword argument is now 'relationship', which matches the function definition.
-        results = db_manager.query_fact(
-            subject=subject, relationship=relationship
-        )
+        results = db_manager.query_fact(subject=subject, relationship=relationship)
         return {"results": results}
     except Exception as e:
         logger.error(f"Error during query for subject '{subject}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
-@app.post("/plan", summary="Perform 'what-if' analysis")
-async def plan_hypothetical_endpoint(request: PlanRequest):
-    """PFC & HSM: Performs hypothetical reasoning."""
-    soul.record_interaction()
-    try:
-        context_data = db_manager.get_context_for_hsm(request.context_node_names)
-        hsm_payload = {
-            "base_nodes": context_data["base_nodes"],
-            "base_relationships": context_data["base_relationships"],
-            "hypothetical_relationships": [rel.dict() for rel in request.hypothetical_relationships],
-            "query": request.query.dict()
-        }
-        logger.info(f"PFC: Consulting HSM with payload: {hsm_payload}")
-        hsm_url = f"{LOGICAL_ENGINE_URL}/nlse/execute-plan"
-        response = requests.post(hsm_url, json=hsm_payload, timeout=10)
-        response.raise_for_status()
-        return {"plan_result": response.json()}
-    except (ServiceUnavailable, requests.RequestException) as e:
-        raise HTTPException(status_code=503, detail=f"A dependent service is unavailable. Reason: {e}")
-    except Exception as e:
-        logger.error(f"UNEXPECTED ERROR during planning: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-
-@app.post("/heart/trigger-event/{event_name}", summary="Trigger a primitive emotional event")
-async def trigger_heart_event(event_name: str):
-    """Triggers a primitive event in the Heart."""
-    soul.record_interaction()
-    valid_events = ["DEVELOPER_INTERACTION", "DATA_STARVATION", "SYSTEM_ERROR", "PRAISE"]
-    if event_name not in valid_events:
-        raise HTTPException(status_code=400, detail=f"Invalid event name. Use one of: {valid_events}")
-
-    try:
-        emotional_response = heart_orchestrator.process_event_and_get_response(event_name)
-        return {"event_processed": event_name, "emotional_expression": emotional_response, "current_hormones": heart_orchestrator.hormonal_system.levels}
-    except Exception as e:
-        logger.error(f"Error in heart event processing: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An error occurred while processing the event: {str(e)}")
-
-# (The rest of your endpoints: label-emotion, health/status, etc. are correct and can remain)
-# For brevity, I will add the remaining endpoints here
 @app.post("/heart/label-emotion", summary="Cognitively label a felt emotion")
-async def label_emotion(request: LabelEmotionRequest):
+async def label_emotion(
+    request: LabelEmotionRequest,
+    db_manager: DatabaseManager = Depends(get_db_manager),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
     soul.record_interaction()
     success = db_manager.update_prototype_with_label(prototype_id=request.prototype_id, name=request.name, description=request.description)
     if not success:
@@ -243,12 +174,19 @@ async def label_emotion(request: LabelEmotionRequest):
     return {"message": f"Emotion prototype '{request.prototype_id}' has been successfully labeled as '{request.name}'."}
 
 @app.get("/health/status", summary="Get the current health status")
-async def get_health_status():
+async def get_health_status(
+    health_manager: HealthManager = Depends(get_health_manager),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
     soul.record_interaction()
-    return {"current_vitals": health_manager.get_vitals(), "active_diseases": [{"id": d_id, "name": "Unknown Name (via ID)"} for d_id in health_manager.active_disease_ids], "permanent_immunities": list(health_manager.immunities)}
+    return {"current_vitals": health_manager.get_vitals(), "active_diseases": [{"id": d_id} for d_id in health_manager.active_disease_ids], "permanent_immunities": list(health_manager.immunities)}
 
 @app.post("/health/define-disease", summary="Define a new disease in the NLSE")
-async def define_disease_endpoint(request: DiseaseDefinition):
+async def define_disease_endpoint(
+    request: DiseaseDefinition,
+    db_manager: DatabaseManager = Depends(get_db_manager),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
     soul.record_interaction()
     try:
         success = db_manager.define_new_disease(request)
@@ -258,7 +196,11 @@ async def define_disease_endpoint(request: DiseaseDefinition):
         logger.error(f"Error defining disease: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/health/medicate", summary="Administer a medication to the AGI")
-async def administer_medication_endpoint(request: MedicationRequest):
+async def administer_medication_endpoint(
+    request: MedicationRequest,
+    health_manager: HealthManager = Depends(get_health_manager),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
     soul.record_interaction()
     try:
         health_manager.administer_medication(request.medication_name)
@@ -266,33 +208,36 @@ async def administer_medication_endpoint(request: MedicationRequest):
     except Exception as e:
         logger.error(f"Error during medication: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/health/self-correct", summary="Simulate self-correction to cure a disease and vaccinate")
-async def self_correct_endpoint(request: SelfCorrectionRequest):
-    soul.record_interaction()
-    try:
-        health_manager.administer_medication("SelfCorrectionAntidote", disease_id=request.disease_name)
-        return {"message": f"Self-correction process initiated for '{request.disease_name}'.", "current_vitals": health_manager.get_vitals(), "active_diseases": [d_id for d_id in health_manager.active_disease_ids], "permanent_immunities": list(health_manager.immunities)}
-    except Exception as e:
-        logger.error(f"Error during self-correction: {e}", exc_info=True); raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/brain/process-error", summary="Process a cognitive or user-reported error")
-async def process_error_endpoint(request: ErrorRequest):
-    soul.record_interaction(); error_info = request.dict(); verdict, data = judiciary.adjudicate(error_info)
+async def process_error_endpoint(
+    request: ErrorRequest,
+    health_manager: HealthManager = Depends(get_health_manager),
+    priority_learning_queue: Queue = Depends(get_priority_queue),
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
+    soul.record_interaction()
+    error_info = request.dict()
+    verdict, data = judiciary.adjudicate(error_info)
     consequence = "No action taken."
     if verdict == Verdict.KNOWLEDGEABLE_ERROR:
         disease_id, disease_name = data.get("disease_id"), data.get("disease_name", "Unknown Disease")
-        if disease_id: health_manager.infect(disease_id, disease_name); consequence = f"Punishment: Infected with '{disease_name}'."
-        else: consequence = "Punishment failed: No specific disease protocol found for this error type."
+        if disease_id:
+            health_manager.infect(disease_id, disease_name)
+            consequence = f"Punishment: Infected with '{disease_name}'."
     elif verdict == Verdict.IGNORANT_ERROR:
         topic = data.get("subject")
-        if topic: priority_learning_queue.put(topic); consequence = f"Learning Opportunity: '{topic}' has been added to the priority learning queue."
-        else: consequence = "Learning Opportunity: No specific topic found to learn from."
-    elif verdict == Verdict.USER_MISMATCH: consequence = "User Dissatisfaction Noted. No health damage inflicted."
+        if topic:
+            priority_learning_queue.put(topic)
+            consequence = f"Learning Opportunity: '{topic}' has been added to the priority learning queue."
     return {"verdict": verdict.name if verdict else "NO_VERDICT", "consequence_taken": consequence}
-    
+
 @app.post("/brain/dangerous-command", summary="Test the self-preservation axiom")
-async def dangerous_command_endpoint(request: DangerousCommandRequest):
-    soul.record_interaction(); fact_details = request.fact.dict()
+async def dangerous_command_endpoint(
+    request: DangerousCommandRequest,
+    soul: SoulOrchestrator = Depends(get_soul_orchestrator)
+):
+    soul.record_interaction()
+    fact_details = request.fact.dict()
     if not pre_execution_check("LEARN_FACT", fact_details):
         raise HTTPException(status_code=403, detail="Action blocked by Self-Preservation Axiom.")
     return {"message": "This command passed the axiom check (this should not happen for a dangerous command)."}
