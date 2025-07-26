@@ -1,7 +1,5 @@
 import logging
 import asyncio
-import requests
-from requests.exceptions import RequestException
 from queue import Queue
 from typing import Dict, Any
 
@@ -12,7 +10,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 # --- Core AGI Component Imports ---
 from db_interface import DatabaseManager
 from cerebellum import cerebellum_formatter
-from truth_recognizer import TruthRecognizer
+from truth_recognizer import truth_recognizer
 from heart.orchestrator import HeartOrchestrator
 from heart.crystallizer import EmotionCrystallizer
 from health.manager import HealthManager
@@ -35,11 +33,32 @@ logging.basicConfig(level=logging.INFO, format='%(name)s:%(levelname)s:%(message
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Agile Mind AGI", description="The central cognitive API for the AGI.")
 
-# --- 2. CORRECTED DEPENDENCY & LIFECYCLE MANAGEMENT ---
-# This new setup guarantees a true singleton pattern for all core components.
-
 # A global dictionary to hold our singleton instances
 app_state: Dict[str, Any] = {}
+
+
+# --- 2. DEPENDENCY INJECTION & LIFECYCLE MANAGEMENT ---
+# This block defines how core components are created and accessed.
+
+def get_db_manager() -> DatabaseManager:
+    """Dependency provider for the DatabaseManager."""
+    return app_state["db_manager"]
+
+def get_soul_orchestrator() -> SoulOrchestrator:
+    """Dependency provider for the SoulOrchestrator."""
+    return app_state["soul"]
+
+def get_heart_orchestrator() -> HeartOrchestrator:
+    """Dependency provider for the HeartOrchestrator."""
+    return app_state["soul"].heart_orchestrator
+
+def get_health_manager() -> HealthManager:
+    """Dependency provider for the HealthManager."""
+    return app_state["soul"].health_manager
+
+def get_priority_queue() -> Queue:
+    """Dependency provider for the priority learning queue."""
+    return app_state["soul"].priority_learning_queue
 
 @app.on_event("startup")
 async def startup_event():
@@ -49,22 +68,17 @@ async def startup_event():
     """
     logger.info("AGI system startup initiated. Creating singleton services...")
     
-    # Create the single DatabaseManager instance
+    # Create the singletons in the correct dependency order
     db_manager = DatabaseManager()
     app_state["db_manager"] = db_manager
     
-    # Create other components that depend on the db_manager
-    health_manager = HealthManager()
-    heart_orchestrator = HeartOrchestrator(db_manager)
-    priority_learning_queue = Queue()
     emotion_crystallizer = EmotionCrystallizer(db_manager)
+    heart_orchestrator = HeartOrchestrator(db_manager, emotion_crystallizer)
+    health_manager = HealthManager(db_manager)
+    priority_learning_queue = Queue()
     imm = InternalMonologueModeler()
     expression_protocol = UnifiedExpressionProtocol()
     
-    # Import truth_recognizer here to avoid circular dependencies
-    from truth_recognizer import truth_recognizer
-    
-    # Create the single SoulOrchestrator instance
     soul = SoulOrchestrator(
         db_manager=db_manager, health_manager=health_manager,
         heart_orchestrator=heart_orchestrator,
@@ -85,27 +99,11 @@ async def shutdown_event():
     if "db_manager" in app_state:
         app_state["db_manager"].close()
 
-# These are the new, simplified dependency providers. They just fetch
-# the already-created instance from our global state dictionary.
-def get_db_manager() -> DatabaseManager:
-    return app_state["db_manager"]
-
-def get_soul_orchestrator() -> SoulOrchestrator:
-    return app_state["soul"]
-
-def get_heart_orchestrator() -> HeartOrchestrator:
-    # We can get it directly from the soul if needed, or from app_state
-    return app_state["soul"].heart_orchestrator
-
-# Instrument the app for Prometheus metrics after defining app_state
+# Instrument the app for Prometheus metrics
 Instrumentator().instrument(app).expose(app)
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("AGI system shutting down...")
-    if "db_manager" in app_state:
-        app_state["db_manager"].close()
 
-# --- 4. API ENDPOINTS ---
+
+# --- 3. API ENDPOINTS ---
 # Each endpoint now uses `Depends` to get the components it needs.
 
 @app.get("/health", summary="Basic API health check")
@@ -136,6 +134,8 @@ async def learn_endpoint(
             return {"message": "Fact validated and learned successfully", "fact": fact}
     except (ValueError, KeyError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ServiceUnavailable as e:
+        raise HTTPException(status_code=503, detail=f"A critical service is unavailable: {e}")
     except Exception as e:
         logger.error(f"UNEXPECTED ERROR during learning: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
