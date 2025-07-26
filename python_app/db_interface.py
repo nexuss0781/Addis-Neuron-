@@ -302,6 +302,7 @@ class DatabaseManager:
         """
         self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
         
+        # Find the UUID for the subject concept.
         subject_uuid = self.get_uuid_for_name(subject)
 
         if not subject_uuid:
@@ -310,49 +311,45 @@ class DatabaseManager:
 
         self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building query plan...")
 
-        # --- FIX START ---
-        # The ExecutionPlan must exactly match the Rust structs.
-        # 1. "relationship_type" is now "rel_type".
-        # 2. "depth" is removed as it's not a valid field.
+        # The ExecutionPlan must exactly match the Rust data structures.
         plan = {
             "steps": [
                 {
                     "Fetch": {
                         "id": subject_uuid,
-                        "context_key": "start_node"
+                        "context_key": "start_node" # Define the output of this step
                     }
                 },
                 {
                     "Traverse": {
-                        "from_context_key": "start_node",
+                        "from_context_key": "start_node", # Use the output of the previous step
                         "rel_type": relationship.upper(), # Corrected key
-                        "output_key": "result_nodes"
+                        "output_key": "result_nodes" # Define the output of this step
                     }
                 }
             ],
             "mode": "Standard"
         }
-        # --- FIX END ---
 
         try:
             result_data = self._execute_nlse_plan(plan, "query fact")
             
             processed_results = []
-            # --- FIX START ---
             # The Rust QueryResult returns the final list of atoms directly in the "atoms" key.
             if result_data and "atoms" in result_data:
                 for atom in result_data.get("atoms", []):
-                    atom_name = atom.get("properties", {}).get("name", {}).get("String")
-                    if atom_name:
-                        processed_results.append(atom_name)
-            # --- FIX END ---
+                    # Ensure properties and name exist before trying to access them
+                    name_property = atom.get("properties", {}).get("name", {})
+                    if isinstance(name_property, dict):
+                         atom_name = name_property.get("String")
+                         if atom_name:
+                            processed_results.append(atom_name)
             
             self.logger.info(f"Query for '{subject}' found results: {processed_results}")
             return processed_results
 
-        except ServiceUnavailable as e:
-            # This is expected if the NLSE returns a 4xx or 5xx error.
-            self.logger.error(f"Could not complete query for '{subject}' because NLSE service was unavailable or the plan was rejected: {e}")
+        except ServiceUnavailable:
+            self.logger.error(f"Query plan for '{subject}' was rejected by the NLSE. The plan may be invalid.")
             return []
         except Exception as e:
             self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
