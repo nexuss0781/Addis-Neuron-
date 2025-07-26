@@ -34,6 +34,23 @@ class HeartOrchestrator:
         self.emotion_prototypes = self._load_emotion_prototypes()
         self.logger = logging.getLogger(__name__)
         self.logger.info("Heart Orchestrator initialized.")
+    def _load_emotion_prototypes(self) -> Dict[str, Any]:
+        """
+        Loads the foundational emotion prototypes from a JSON file.
+        This defines the AGI's core emotional palette.
+        """
+        prototypes_path = os.path.join(os.path.dirname(__file__), 'emotion_prototypes.json')
+        try:
+            with open(prototypes_path, 'r') as f:
+                prototypes_data = json.load(f)
+            self.logger.info(f"Successfully loaded {len(prototypes_data)} emotion prototypes.")
+            return prototypes_data
+        except FileNotFoundError:
+            self.logger.error(f"CRITICAL: Emotion prototypes file not found at {prototypes_path}. The AGI will have no emotions.")
+            return {}
+        except json.JSONDecodeError:
+            self.logger.error(f"CRITICAL: Failed to parse emotion prototypes file at {prototypes_path}.")
+            return {}        
 
     # Corrected: Moved this function inside the class
     def update_from_health(self, vitals: Dict[str, float]):
