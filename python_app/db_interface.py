@@ -245,13 +245,13 @@ class DatabaseManager:
     def learn_fact(self, triple: StructuredTriple, heart_orchestrator: Any) -> None:
         """
         Learns a conceptual fact by creating a relationship between two known concepts,
-        influenced by the current emotional state.
+        influenced by the current emotional state, using a valid ExecutionPlan.
         """
         current_time = int(time.time())
 
-        # Find Concept IDs for the subject and object words.
-        subject_concept_id = self.name_to_uuid_cache.get(f"concept:{triple.subject.lower()}")
-        object_concept_id = self.name_to_uuid_cache.get(f"concept:{triple.object.lower()}")
+        # Find Concept IDs for the subject and object using the correct cache keys.
+        subject_concept_id = self.get_uuid_for_name(triple.subject)
+        object_concept_id = self.get_uuid_for_name(triple.object)
 
         if not subject_concept_id or not object_concept_id:
             msg = f"Cannot learn fact. Concept for '{triple.subject}' or '{triple.object}' is unknown. Please label them first."
@@ -261,7 +261,12 @@ class DatabaseManager:
         # Get current emotional context from the Heart
         current_emotional_state = heart_orchestrator.get_current_hormonal_state()
 
-        # Create the relationship between the two CONCEPTS
+        # --- THE UNDENIABLE FIX ---
+        # The ExecutionPlan must send a complete atom structure for the Write/Upsert.
+        # However, we only need to specify the ID and the new relationship to be merged.
+        # The NLSE's internal logic will handle the merge with the existing atom data.
+
+        # Create the relationship to be added
         fact_relationship = {
             "target_id": object_concept_id,
             "rel_type": RelationshipType[triple.relationship.upper()].value,
@@ -270,13 +275,24 @@ class DatabaseManager:
         }
 
         # Create an ExecutionPlan to UPDATE the subject concept atom with this new fact.
+        # The Rust 'Write' step acts as an upsert: it finds the atom by ID and merges
+        # the fields provided. We only need to provide the ID and the new relationship.
         subject_concept_update = {
             "id": subject_concept_id,
+            # Provide default/empty values for other required fields for a valid NeuroAtom
+            "label": AtomType.Concept.value,
+            "properties": {}, # Properties will be merged, not overwritten
             "emotional_resonance": current_emotional_state,
             "embedded_relationships": [fact_relationship],
+            "significance": 1.0, # Significance will be updated
+            "access_timestamp": current_time,
+            "context_id": None,
+            "state_flags": 0
         }
 
         plan = {"steps": [{"Write": subject_concept_update}], "mode": ExecutionMode.STANDARD.value}
+        # --- END FIX ---
+        
         self._execute_nlse_plan(plan, "learn conceptual fact")
 
     def query_fact(self, subject: str, relationship: str) -> List[str]:
