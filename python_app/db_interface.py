@@ -169,7 +169,7 @@ class DatabaseManager:
 
         plan = {"steps": plan_steps, "mode": ExecutionMode.STANDARD.value}
         self._execute_nlse_plan(plan, f"learn word '{word_str}'")
- 
+
     def label_concept(self, word_str: str, concept_name: str) -> None:
         """
         Teaches the AGI that a word is the label for a concept, and correctly
