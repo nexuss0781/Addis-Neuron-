@@ -42,26 +42,21 @@ class DatabaseManager:
             return
 
         # Configuration
-        NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-        NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-        NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password123")
         REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
         REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 
-        self.neo4j_driver = None
-        self.redis_client = None
         self.logger = logging.getLogger(__name__)
+        self.redis_client = None # Start as None
 
         # Caches for mapping human-readable names to internal UUIDs
         self.name_to_uuid_cache: Dict[str, str] = {}
         self.uuid_to_name_cache: Dict[str, str] = {}
 
         # Establish connections
-        # self._connect_to_neo4j(NEO4J_URI, (NEO4J_USER, NEO4J_PASSWORD))
         self._connect_to_redis(REDIS_HOST, REDIS_PORT)
 
         # Preload the cache with existing knowledge from the NLSE
-        self.preload_existing_knowledge()
+        # self.preload_existing_knowledge() # We can disable this for unit tests
         self._initialized = True
 
     def _connect_to_neo4j(self, uri: str, auth: tuple):
@@ -74,14 +69,19 @@ class DatabaseManager:
             self.neo4j_driver = None
 
     def _connect_to_redis(self, host: str, port: int):
-        """Establishes a connection to the Redis server."""
+        """Establishes a connection to the Redis server, handling connection errors."""
         try:
-            self.redis_client = redis.Redis(host=host, port=port, db=0, decode_responses=True)
-            self.redis_client.ping()
+            # Create a client instance
+            client = redis.Redis(host=host, port=port, db=0, decode_responses=True)
+            # Test the connection
+            client.ping()
+            # If successful, assign it to the class attribute
+            self.redis_client = client
             self.logger.info("Successfully connected to Redis.")
-        except Exception as e:
+        except redis.exceptions.ConnectionError as e:
+            # If the server is not running, this block will execute.
             self.logger.error(f"Failed to connect to Redis: {e}")
-            self.redis_client = None
+            # self.redis_client will correctly remain None
 
     def ping_databases(self) -> Dict[str, str]:
         """Pings databases to check live connectivity."""

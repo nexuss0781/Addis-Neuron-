@@ -7,12 +7,10 @@ import argparse
 from typing import Dict, Any
 
 # --- CPEM Configuration ---
-# Use the script's location to define the base directory for robustness
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CPEM_DIR = os.path.join(BASE_DIR, ".cpem")
 PID_DIR = os.path.join(CPEM_DIR, "pids")
 LOG_DIR = os.path.join(CPEM_DIR, "logs")
-# Ensure the PATH includes Cargo's bin directory for all subprocesses
 os.environ['PATH'] = "/root/.cargo/bin:" + os.environ.get('PATH', '')
 
 SERVICES: Dict[str, Dict[str, Any]] = {
@@ -26,49 +24,26 @@ for name in SERVICES:
     SERVICES[name]["log_file"] = os.path.join(LOG_DIR, f"{name}.log")
 
 
-def bootstrap():
-    """Prepares the environment by creating necessary data files and directories."""
-    print("CPEM: Bootstrapping environment...")
-    
-    # Create the data directory the Rust engine needs to start.
-    data_dir = os.path.join(BASE_DIR, "nlse_data")
-    print(f"CPEM: Ensuring data directory exists at '{data_dir}'...")
-    os.makedirs(data_dir, exist_ok=True)
-    
-    # Create the empty placeholder files the StorageManager loads.
-    atoms_path = os.path.join(data_dir, "atoms.json")
-    graph_path = os.path.join(data_dir, "graph.bin")
-
-    if not os.path.exists(atoms_path):
-        with open(atoms_path, "w") as f:
-            f.write("[]")
-        print("CPEM: Created empty 'atoms.json'.")
-        
-    if not os.path.exists(graph_path):
-        with open(graph_path, "w") as f:
-            pass # Just create the empty file
-        print("CPEM: Created empty 'graph.bin'.")
-
-    print("CPEM: Bootstrap complete.")
-
-
 def up():
     """Starts all services as background processes and creates log files."""
     print("CPEM: Starting all services...")
     os.makedirs(PID_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
     
+    # Ensure Rust engine is compiled before launching services
+    rust_binary_path = SERVICES["logical_engine"]["command"][0]
+    if not os.path.exists(rust_binary_path):
+        print("CPEM: Rust binary not found. Compiling...")
+        compile_proc = subprocess.run("cargo build --release", shell=True, cwd=SERVICES["logical_engine"]["cwd"], capture_output=True, text=True)
+        if compile_proc.returncode != 0:
+            print(f"CPEM ERROR: Failed to compile Rust engine.\n{compile_proc.stderr}")
+            return
+        print("CPEM: Rust engine compiled successfully.")
+
     for name, config in SERVICES.items():
         if os.path.exists(config["pid_file"]):
-            try:
-                with open(config["pid_file"], 'r') as f: pid = int(f.read().strip())
-                os.kill(pid, 0) # Check if process exists
-                print(f"CPEM: Service '{name}' (PID: {pid}) appears to be running. Skipping.")
-                continue
-            except (IOError, ValueError, ProcessLookupError):
-                print(f"CPEM: Found stale PID file for '{name}'. Removing.")
-                os.remove(config["pid_file"])
-
+            print(f"CPEM: Service '{name}' appears to be running. Skipping.")
+            continue
         print(f"CPEM: Launching '{name}'... Log: {config['log_file']}")
         try:
             log_file = open(config["log_file"], "w")
@@ -98,9 +73,14 @@ def down():
             # Kill the entire process group to ensure cleanup of child processes
             os.killpg(os.getpgid(pid), signal.SIGTERM)
             time.sleep(1)
-            os.remove(pid_file) # Clean up PID file after sending signal
+            # Force kill if it's still alive
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                print(f"CPEM WARNING: Sent SIGKILL to '{name}'.")
+            except OSError:
+                pass # Process group terminated successfully
+            os.remove(pid_file)
         except (FileNotFoundError, ProcessLookupError, ValueError):
-            # The process is already gone, just clean up the file
             if os.path.exists(pid_file):
                 os.remove(pid_file)
         except Exception as e:
@@ -120,7 +100,7 @@ def status():
                         pid = int(pid_str)
                         os.kill(pid, 0) # Check if process exists without sending a signal
                         current_status = "Running"
-            except (ProcessLookupError, ValueError, IOError):
+            except (ProcessLookupError, ValueError):
                 current_status = "Stopped (Stale PID)"
             except Exception as e:
                 current_status = f"Error: {type(e).__name__}"
@@ -146,7 +126,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CPEM: Colab Process Environment Manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
     
-    subparsers.add_parser("bootstrap", help="Prepare the environment (create data files).")
     subparsers.add_parser("up", help="Start all services.")
     subparsers.add_parser("down", help="Stop all services.")
     subparsers.add_parser("status", help="Check the status of all services.")
@@ -156,10 +135,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Simple dispatcher to call the correct function
-    if args.command == "bootstrap":
-        bootstrap()
-    elif args.command == "up":
+    if args.command == "up":
         up()
     elif args.command == "down":
         down()
