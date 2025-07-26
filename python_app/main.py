@@ -35,82 +35,70 @@ logging.basicConfig(level=logging.INFO, format='%(name)s:%(levelname)s:%(message
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Agile Mind AGI", description="The central cognitive API for the AGI.")
 
-# --- 2. DEPENDENCY INJECTION SETUP (The Core Fix) ---
-# This is the robust, testable way to manage shared components.
+# --- 2. CORRECTED DEPENDENCY & LIFECYCLE MANAGEMENT ---
+# This new setup guarantees a true singleton pattern for all core components.
 
-# Create a dictionary to hold our singleton instances
+# A global dictionary to hold our singleton instances
 app_state: Dict[str, Any] = {}
-
-def get_db_manager() -> DatabaseManager:
-    """Dependency provider for the DatabaseManager."""
-    if "db_manager" not in app_state:
-        app_state["db_manager"] = DatabaseManager()
-    return app_state["db_manager"]
-
-def get_health_manager() -> HealthManager:
-    """Dependency provider for the HealthManager."""
-    if "health_manager" not in app_state:
-        app_state["health_manager"] = HealthManager()
-    return app_state["health_manager"]
-
-def get_heart_orchestrator(db_manager: DatabaseManager = Depends(get_db_manager)) -> HeartOrchestrator:
-    """Dependency provider for the HeartOrchestrator."""
-    if "heart_orchestrator" not in app_state:
-        app_state["heart_orchestrator"] = HeartOrchestrator(db_manager)
-    return app_state["heart_orchestrator"]
-    
-def get_priority_queue() -> Queue:
-    """Dependency provider for the priority learning queue."""
-    if "priority_learning_queue" not in app_state:
-        app_state["priority_learning_queue"] = Queue()
-    return app_state["priority_learning_queue"]
-
-def get_soul_orchestrator(
-    db_manager: DatabaseManager = Depends(get_db_manager),
-    health_manager: HealthManager = Depends(get_health_manager),
-    heart_orchestrator: HeartOrchestrator = Depends(get_heart_orchestrator),
-    priority_learning_queue: Queue = Depends(get_priority_queue)
-) -> SoulOrchestrator:
-    """Dependency provider for the master SoulOrchestrator."""
-    if "soul" not in app_state:
-        # --- THE UNDENIABLE FIX ---
-        # We must instantiate all dependencies before using them.
-        emotion_crystallizer = EmotionCrystallizer(db_manager)
-        imm = InternalMonologueModeler()
-        expression_protocol = UnifiedExpressionProtocol()
-        # The 'truth_recognizer' singleton is imported from its module.
-        from truth_recognizer import truth_recognizer 
-        # --- END FIX ---
-        
-        app_state["soul"] = SoulOrchestrator(
-            db_manager=db_manager, health_manager=health_manager,
-            heart_orchestrator=heart_orchestrator,
-            emotion_crystallizer=emotion_crystallizer,
-            priority_learning_queue=priority_learning_queue,
-            truth_recognizer=truth_recognizer, # Now this variable exists
-            imm_instance=imm,
-            expression_protocol_instance=expression_protocol
-        )
-    return app_state["soul"]
-# Instrument the app for Prometheus metrics
-Instrumentator().instrument(app).expose(app)
-
-# --- 3. APP LIFECYCLE EVENTS ---
 
 @app.on_event("startup")
 async def startup_event():
-    """On startup, we initialize the components and launch the Soul's life cycle."""
-    logger.info("AGI system startup initiated. Initializing components via dependency injection...")
-    # By calling the main dependency function once, we trigger the creation of all singletons.
-    soul = get_soul_orchestrator(
-        get_db_manager(),
-        get_health_manager(),
-        get_heart_orchestrator(get_db_manager()),
-        get_priority_queue()
+    """
+    On startup, we create a SINGLE INSTANCE of each core component
+    and store it in our global `app_state` dictionary.
+    """
+    logger.info("AGI system startup initiated. Creating singleton services...")
+    
+    # Create the single DatabaseManager instance
+    db_manager = DatabaseManager()
+    app_state["db_manager"] = db_manager
+    
+    # Create other components that depend on the db_manager
+    health_manager = HealthManager()
+    heart_orchestrator = HeartOrchestrator(db_manager)
+    priority_learning_queue = Queue()
+    emotion_crystallizer = EmotionCrystallizer(db_manager)
+    imm = InternalMonologueModeler()
+    expression_protocol = UnifiedExpressionProtocol()
+    
+    # Import truth_recognizer here to avoid circular dependencies
+    from truth_recognizer import truth_recognizer
+    
+    # Create the single SoulOrchestrator instance
+    soul = SoulOrchestrator(
+        db_manager=db_manager, health_manager=health_manager,
+        heart_orchestrator=heart_orchestrator,
+        emotion_crystallizer=emotion_crystallizer,
+        priority_learning_queue=priority_learning_queue,
+        truth_recognizer=truth_recognizer, imm_instance=imm,
+        expression_protocol_instance=expression_protocol
     )
+    app_state["soul"] = soul
+    
     logger.info("Starting the Soul's main life cycle...")
     asyncio.create_task(soul.live())
+    logger.info("All singleton services created and Soul is alive.")
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("AGI system shutting down...")
+    if "db_manager" in app_state:
+        app_state["db_manager"].close()
+
+# These are the new, simplified dependency providers. They just fetch
+# the already-created instance from our global state dictionary.
+def get_db_manager() -> DatabaseManager:
+    return app_state["db_manager"]
+
+def get_soul_orchestrator() -> SoulOrchestrator:
+    return app_state["soul"]
+
+def get_heart_orchestrator() -> HeartOrchestrator:
+    # We can get it directly from the soul if needed, or from app_state
+    return app_state["soul"].heart_orchestrator
+
+# Instrument the app for Prometheus metrics after defining app_state
+Instrumentator().instrument(app).expose(app)
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("AGI system shutting down...")
