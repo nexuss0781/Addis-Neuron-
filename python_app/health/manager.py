@@ -10,18 +10,26 @@ class HealthManager:
     Acts as the single source of truth for the AGI's health.
     Manages vital signs and active diseases by querying the NLSE for protocols.
     """
-    def __init__(self):
-        """Initializes the AGI with a full set of vitals and no diseases."""
+    def __init__(self, db_manager: 'DatabaseManager'):
+        """
+        Initializes the Health Manager, which tracks the AGI's vitals and diseases.
+        """
+        # --- THE UNDENIABLE FIX ---
+        # Store the db_manager instance.
+        self.db_manager = db_manager
+        # --- END FIX ---
+
+        self.logger = logging.getLogger(__name__)
         self.vitals: Dict[str, float] = {
             "neural_coherence": 1.0,
             "system_integrity": 1.0,
             "cognitive_energy": 1.0,
-            "immunity_level": 0.5,
+            "immunity_level": 0.5
         }
-        # Corrected: List initialization for active_disease_ids
-        self.active_disease_ids: List[str] = []
-        self.immunities: Set[str] = set() # Stores names of diseases AGI is immune to
-        logger.info(f"Health Manager (NLSE-Integrated) initialized. Vitals: {self.vitals}")
+        self.active_disease_ids: Set[str] = set()
+        self.immunities: Set[str] = set()
+        self.last_update_time: float = time.time()
+        self.logger.info(f"Health Manager (NLSE-Integrated) initialized. Vitals: {self.vitals}")
 
     def get_vitals(self) -> Dict[str, float]:
         """Returns a copy of the current vital signs."""
