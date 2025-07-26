@@ -302,7 +302,6 @@ class DatabaseManager:
         """
         self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
         
-        # Find the UUID for the subject concept.
         subject_uuid = self.get_uuid_for_name(subject)
 
         if not subject_uuid:
@@ -311,44 +310,50 @@ class DatabaseManager:
 
         self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building query plan...")
 
-        # --- THE UNDENIABLE FIX ---
-        # The ExecutionPlan must include the context keys required by the Rust QueryEngine.
+        # --- FIX START ---
+        # The ExecutionPlan must exactly match the Rust structs.
+        # 1. "relationship_type" is now "rel_type".
+        # 2. "depth" is removed as it's not a valid field.
         plan = {
             "steps": [
                 {
                     "Fetch": {
                         "id": subject_uuid,
-                        "context_key": "start_node" # Define the output of this step
+                        "context_key": "start_node"
                     }
                 },
                 {
                     "Traverse": {
-                        "from_context_key": "start_node", # Use the output of the previous step
-                        "relationship_type": relationship.upper(),
-                        "depth": 1,
-                        "output_key": "result_nodes" # Define the output of this step
+                        "from_context_key": "start_node",
+                        "rel_type": relationship.upper(), # Corrected key
+                        "output_key": "result_nodes"
                     }
                 }
             ],
             "mode": "Standard"
         }
-        # --- END FIX ---
+        # --- FIX END ---
 
         try:
             result_data = self._execute_nlse_plan(plan, "query fact")
             
             processed_results = []
-            # The Rust QE now returns a more complex object, we need to parse it correctly
-            if result_data and "results" in result_data and result_data["results"]:
-                final_atoms = result_data["results"][-1] # Get atoms from the last step
-                for atom in final_atoms:
+            # --- FIX START ---
+            # The Rust QueryResult returns the final list of atoms directly in the "atoms" key.
+            if result_data and "atoms" in result_data:
+                for atom in result_data.get("atoms", []):
                     atom_name = atom.get("properties", {}).get("name", {}).get("String")
                     if atom_name:
                         processed_results.append(atom_name)
+            # --- FIX END ---
             
             self.logger.info(f"Query for '{subject}' found results: {processed_results}")
             return processed_results
 
+        except ServiceUnavailable as e:
+            # This is expected if the NLSE returns a 4xx or 5xx error.
+            self.logger.error(f"Could not complete query for '{subject}' because NLSE service was unavailable or the plan was rejected: {e}")
+            return []
         except Exception as e:
             self.logger.error(f"An unexpected error occurred during query_fact for '{subject}': {e}", exc_info=True)
             return []
