@@ -302,7 +302,6 @@ class DatabaseManager:
         """
         self.logger.info(f"Received query: ({subject}) -[{relationship}]-> ?")
         
-        # Find the UUID for the subject concept.
         subject_uuid = self.get_uuid_for_name(subject)
 
         if not subject_uuid:
@@ -311,34 +310,35 @@ class DatabaseManager:
 
         self.logger.debug(f"Found UUID '{subject_uuid}' for concept '{subject}'. Building query plan...")
 
-        # The ExecutionPlan must exactly match the Rust data structures.
-        plan = {
-            "steps": [
-                {
-                    "Fetch": {
-                        "id": subject_uuid,
-                        "context_key": "start_node" # Define the output of this step
-                    }
-                },
-                {
-                    "Traverse": {
-                        "from_context_key": "start_node", # Use the output of the previous step
-                        "rel_type": relationship.upper(), # Corrected key
-                        "output_key": "result_nodes" # Define the output of this step
-                    }
-                }
-            ],
-            "mode": "Standard"
-        }
-
         try:
+            # Look up the correct enum value. This will raise a KeyError if the relationship is invalid,
+            # which is handled in the except block.
+            rel_type_value = RelationshipType[relationship.upper()].value
+
+            plan = {
+                "steps": [
+                    {
+                        "Fetch": {
+                            "id": subject_uuid,
+                            "context_key": "start_node"
+                        }
+                    },
+                    {
+                        "Traverse": {
+                            "from_context_key": "start_node",
+                            "rel_type": rel_type_value,
+                            "output_key": "result_nodes"
+                        }
+                    }
+                ],
+                "mode": "Standard"
+            }
+
             result_data = self._execute_nlse_plan(plan, "query fact")
             
             processed_results = []
-            # The Rust QueryResult returns the final list of atoms directly in the "atoms" key.
             if result_data and "atoms" in result_data:
                 for atom in result_data.get("atoms", []):
-                    # Ensure properties and name exist before trying to access them
                     name_property = atom.get("properties", {}).get("name", {})
                     if isinstance(name_property, dict):
                          atom_name = name_property.get("String")
@@ -348,6 +348,9 @@ class DatabaseManager:
             self.logger.info(f"Query for '{subject}' found results: {processed_results}")
             return processed_results
 
+        except KeyError:
+            self.logger.error(f"Query failed: Invalid relationship type '{relationship}' requested.")
+            return []
         except ServiceUnavailable:
             self.logger.error(f"Query plan for '{subject}' was rejected by the NLSE. The plan may be invalid.")
             return []

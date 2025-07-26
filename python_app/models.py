@@ -32,7 +32,8 @@ class RelationshipType(str, Enum):
     HAS_SYMPTOM = "HasSymptom"
     IS_CURED_BY = "IsCuredBy"
     HAS_CHAR_IN_SEQUENCE = "HasCharInSequence"
-    IS_CAUSED_BY = "IsCausedBy" # Added for consistency
+    IS_CAUSED_BY = "IsCausedBy"
+    HAS_VERB_ACTION = "HasVerbAction"
 
 
 class ExecutionMode(str, Enum):
