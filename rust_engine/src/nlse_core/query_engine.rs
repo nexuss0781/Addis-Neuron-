@@ -251,7 +251,6 @@ mod tests {
             id: socrates_id, label: AtomType::Concept,
             properties: HashMap::from([("name".to_string(), Value::String("Socrates".to_string()))]),
             embedded_relationships: vec![Relationship { target_id: man_id, rel_type: RelationshipType::IsA, strength: 1.0, access_timestamp: 0 }],
-            // Fill in other fields with default values
             significance: 1.0, access_timestamp: 0, context_id: None, state_flags: 0, emotional_resonance: HashMap::new()
         };
         let man_atom = NeuroAtom {
@@ -273,7 +272,6 @@ mod tests {
     fn test_execute_fetch_plan() {
         let (qe, _, man_id) = setup_test_engine("fetch_plan");
         let fetch_plan = ExecutionPlan {
-            // FIX: Add the required `context_key` field
             steps: vec![PlanStep::Fetch { id: man_id, context_key: "result".to_string() }],
             mode: ExecutionMode::Standard,
         };
@@ -281,14 +279,11 @@ mod tests {
         let result = qe.execute(fetch_plan);
         assert!(result.success);
         
-        // FIX: `result.atoms` is a Vec<Vec<NeuroAtom>>. Get the last inner Vec.
-        let final_step_results_vec = result.atoms.last().unwrap();
-        
-        // FIX: Now call .len() on the inner Vec.
-        assert_eq!(final_step_results_vec.len(), 1);
-        
-        // FIX: Now index into the inner Vec.
-        assert_eq!(final_step_results_vec[0].id, man_id);
+        // --- THE UNDENIABLE FIX ---
+        // `result.atoms` is a Vec<NeuroAtom>, not a Vec<Vec<NeuroAtom>>.
+        // We can assert its length directly.
+        assert_eq!(result.atoms.len(), 1);
+        assert_eq!(result.atoms[0].id, man_id);
     }
 
     #[test]
@@ -296,9 +291,7 @@ mod tests {
         let (qe, socrates_id, man_id) = setup_test_engine("traverse_plan");
         let traverse_plan = ExecutionPlan {
             steps: vec![
-                // FIX: Add the required `context_key` field
                 PlanStep::Fetch { id: socrates_id, context_key: "start_nodes".to_string() },
-                // FIX: Use the correct field names for Traverse
                 PlanStep::Traverse { 
                     from_context_key: "start_nodes".to_string(), 
                     rel_type: RelationshipType::IsA, 
@@ -311,13 +304,9 @@ mod tests {
         let result = qe.execute(traverse_plan);
         assert!(result.success, "Execution should succeed");
 
-        // FIX: `result.atoms` is a Vec<Vec<NeuroAtom>>. Get the last inner Vec.
-        let final_step_results_vec = result.atoms.last().expect("Should have results");
-
-        // FIX: Now call .len() on the inner Vec.
-        assert_eq!(final_step_results_vec.len(), 1, "Should find exactly one related atom");
-        
-        // FIX: Now index into the inner Vec.
-        assert_eq!(final_step_results_vec[0].id, man_id, "The atom found should be Man");
+        // --- THE UNDENIABLE FIX ---
+        // `result.atoms` is a Vec<NeuroAtom>.
+        assert_eq!(result.atoms.len(), 1, "Should find exactly one related atom");
+        assert_eq!(result.atoms[0].id, man_id, "The atom found should be Man");
     }
 }
