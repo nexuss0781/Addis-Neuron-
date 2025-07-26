@@ -126,38 +126,40 @@ class SoulOrchestrator:
                 facts_learned_count = 0
                 for triple in new_triples:
                     try:
-                        # --- FIX START ---
-                        # Before learning a fact, we must ensure its constituent concepts are known.
-                        subject_name = triple.subject.strip()
-                        object_name = triple.object.strip()
+                        # Define a synchronous helper function to ensure proper execution order
+                        def learn_new_fact_safely(current_triple):
+                            subject_name = current_triple.subject.strip()
+                            object_name = current_triple.object.strip()
 
-                        if not subject_name or not object_name:
-                            continue
+                            # Skip empty or invalid triples
+                            if not subject_name or not object_name:
+                                return False
 
-                        # Check and learn subject if unknown
-                        if not self.db_manager.get_uuid_for_name(subject_name):
-                            logger.info(f"CURIOSITY: Learning new concept from subject: '{subject_name}'")
-                            self.db_manager.learn_word(subject_name)
-                            self.db_manager.label_concept(subject_name, subject_name)
+                            # 1. Learn the subject if it's new
+                            if not self.db_manager.get_uuid_for_name(subject_name):
+                                logger.info(f"CURIOSITY: Auto-learning new concept: '{subject_name}'")
+                                self.db_manager.learn_word(subject_name)
+                                self.db_manager.label_concept(subject_name, subject_name)
 
-                        # Check and learn object if unknown
-                        if not self.db_manager.get_uuid_for_name(object_name):
-                            logger.info(f"CURIOSITY: Learning new concept from object: '{object_name}'")
-                            self.db_manager.learn_word(object_name)
-                            self.db_manager.label_concept(object_name, object_name)
-                        
-                        # Now that both concepts are guaranteed to exist, learn the fact.
-                        # We pass the validated triple to the executor.
-                        def learn_fact_sync(current_triple):
+                            # 2. Learn the object if it's new
+                            if not self.db_manager.get_uuid_for_name(object_name):
+                                logger.info(f"CURIOSITY: Auto-learning new concept: '{object_name}'")
+                                self.db_manager.learn_word(object_name)
+                                self.db_manager.label_concept(object_name, object_name)
+                            
+                            # 3. Now, with both concepts guaranteed to exist, learn the fact
                             self.db_manager.learn_fact(current_triple, self.heart_orchestrator)
+                            return True
+
+                        # Execute the safe learning function in the event loop's executor
+                        was_learned = await loop.run_in_executor(None, learn_new_fact_safely, triple)
                         
-                        await loop.run_in_executor(None, learn_fact_sync, triple)
-                        
-                        self.record_new_fact()
-                        facts_learned_count += 1
-                        # --- FIX END ---
+                        if was_learned:
+                            self.record_new_fact()
+                            facts_learned_count += 1
                     except Exception as e:
-                        logger.error(f"CURIOSITY: Error learning new fact '{triple}': {e}", exc_info=True)
+                        logger.error(f"CURIOSITY: Failed to learn fact '{triple}'. Reason: {e}", exc_info=True)
+                
                 logger.info(f"CURIOSITY: Successfully learned {facts_learned_count} new facts for '{topic_to_investigate}'.")
 
     def record_interaction(self):

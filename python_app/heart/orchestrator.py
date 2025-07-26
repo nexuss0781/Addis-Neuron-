@@ -34,11 +34,12 @@ class HeartOrchestrator:
         self.db_manager = db_manager
         self.crystallizer = emotion_crystallizer
         self.hormonal_system = HormonalSystem()
+        self.virtual_physiology = VirtualPhysiology()
         
         # Now it is safe to call the loading function
         self.emotion_prototypes = self._load_emotion_prototypes()
         
-        self.logger.info("Heart Orchestrator initialized.")        
+        self.logger.info("Heart Orchestrator initialized.")
         
     def _load_emotion_prototypes(self) -> Dict[str, Any]:
         """
